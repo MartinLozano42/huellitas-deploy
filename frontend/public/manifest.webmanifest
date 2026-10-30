@@ -1,0 +1,12 @@
+{
+  "name": "Huellitas",
+  "short_name": "Huellitas",
+  "description": "Plataforma para el registro, identificación y protección de mascotas.",
+  "lang": "es",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5fbfd",
+  "theme_color": "#2f9fc0",
+  "icons": [{"src": "/huellitas-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+}
