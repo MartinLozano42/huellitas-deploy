@@ -26,10 +26,6 @@ async function broadcastReportNotification({ excludeUserId, excludeAlso = [], ty
   const message = `${petName} · ${location || 'Ubicación no especificada'}. Abre Huellitas para ver el reporte #${reportId}.`;
   const excluded = [...new Set([Number(excludeUserId), ...excludeAlso.map(Number)].filter(Number.isFinite))];
   const notIn = excluded.map(() => '?').join(', ');
-
-  // Administradores reciben los avisos para moderación. La comunidad recibe alertas
-  // por proximidad cuando compartió una ubicación; si el reporte no tiene coordenadas,
-  // se envía un aviso general porque no es posible calcular distancias.
   const [admins] = await pool.query(
     `SELECT id FROM usuarios WHERE rol='ADMIN' AND id NOT IN (${notIn})`, excluded
   );
@@ -159,8 +155,6 @@ router.post('/reportes', async (req, res) => {
     if (tipo === 'PERDIDA' && pet?.id) {
       await pool.query("UPDATE mascotas SET estado='PERDIDA' WHERE id=? AND usuario_id=?", [pet.id, req.user.id]);
     } else if (tipo === 'ENCONTRADA' && pet?.id && pet.estado === 'PERDIDA') {
-      // No cambiamos el estado de una mascota que ya figura en casa; solo una perdida
-      // pasa a estar marcada como encontrada.
       await pool.query("UPDATE mascotas SET estado='ENCONTRADA' WHERE id=? AND estado='PERDIDA'", [pet.id]);
     }
 
@@ -175,7 +169,6 @@ router.post('/reportes', async (req, res) => {
       longitud
     });
 
-    // Si el hallazgo está asociado a una mascota de otro usuario, se le avisa directamente.
     if (tipo === 'ENCONTRADA' && pet?.usuario_id && Number(pet.usuario_id) !== Number(req.user.id)) {
       await pool.query(
         `INSERT INTO notificaciones (usuario_id, tipo, titulo, mensaje)
@@ -195,7 +188,6 @@ router.post('/reportes', async (req, res) => {
   }
 });
 
-// Lista avistamientos solo para el propietario del aviso de pérdida.
 router.get('/reportes/:id/avistamientos', async (req, res) => {
   try {
     const [reports] = await pool.query(
@@ -220,7 +212,6 @@ router.get('/reportes/:id/avistamientos', async (req, res) => {
   }
 });
 
-// Registra un avistamiento sobre un aviso de pérdida activo.
 router.post('/reportes/:id/avistamientos', async (req, res) => {
   const ubicacion = String(req.body?.ubicacion || '').trim().slice(0, 255);
   const descripcion = String(req.body?.descripcion || '').trim().slice(0, 2000) || null;
@@ -270,32 +261,58 @@ router.post('/reportes/:id/avistamientos', async (req, res) => {
 });
 
 router.patch('/reportes/:id/estado', async (req, res) => {
+  const estado = String(req.body?.estado || '').trim().toUpperCase();
+  if (!['RESUELTO', 'CERRADO'].includes(estado)) {
+    return res.status(400).json({ message: 'El estado debe ser RESUELTO o CERRADO.' });
+  }
+
+  let connection;
   try {
-    const estado = String(req.body?.estado || '').trim().toUpperCase();
-    if (!['RESUELTO', 'CERRADO'].includes(estado)) return res.status(400).json({ message: 'El estado debe ser RESUELTO o CERRADO.' });
-    const [rows] = await pool.query(
-      `SELECT id, mascota_id, tipo, estado FROM reportes WHERE id=? AND usuario_id=? LIMIT 1`,
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.query(
+      `SELECT id, mascota_id, tipo, estado FROM reportes
+       WHERE id=? AND usuario_id=? LIMIT 1 FOR UPDATE`,
       [req.params.id, req.user.id]
     );
     const report = rows[0];
-    if (!report) return res.status(404).json({ message: 'Reporte no encontrado en tu cuenta.' });
-    if (report.estado !== 'ACTIVO') return res.status(409).json({ message: 'El reporte ya no está activo.' });
-    await pool.query('UPDATE reportes SET estado=? WHERE id=?', [estado, report.id]);
-    if (report.mascota_id) {
-      if (report.tipo === 'PERDIDA') {
-        await pool.query("UPDATE mascotas SET estado='EN_CASA' WHERE id=? AND usuario_id=?", [report.mascota_id, req.user.id]);
-      }
-      await pool.query(
+    if (!report) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Reporte no encontrado en tu cuenta.' });
+    }
+    if (report.estado !== 'ACTIVO') {
+      await connection.rollback();
+      return res.status(409).json({ message: 'El reporte ya no está activo.' });
+    }
+
+    await connection.query('UPDATE reportes SET estado=? WHERE id=?', [estado, report.id]);
+
+    if (report.mascota_id && report.tipo === 'PERDIDA' && estado === 'RESUELTO') {
+      await connection.query(
+        "UPDATE mascotas SET estado='EN_CASA' WHERE id=? AND usuario_id=?",
+        [report.mascota_id, req.user.id]
+      );
+      await connection.query(
         `UPDATE reportes SET estado='RESUELTO'
-         WHERE mascota_id=? AND estado='ACTIVO' AND tipo='PERDIDA' AND id<>? AND usuario_id=?`,
-        [report.mascota_id, report.id, req.user.id]
+         WHERE mascota_id=? AND usuario_id=? AND tipo='PERDIDA' AND estado='ACTIVO'`,
+        [report.mascota_id, req.user.id]
       );
     }
-    res.json({ message: estado === 'RESUELTO' ? '¡Caso resuelto! Gracias por actualizar Huellitas.' : 'Reporte cerrado.' });
+
+    await connection.commit();
+    res.json({
+      message: report.tipo === 'PERDIDA' && estado === 'RESUELTO'
+        ? '¡Qué alegría! La mascota volvió a estar EN CASA y el aviso quedó resuelto.'
+        : estado === 'RESUELTO' ? 'Caso resuelto correctamente.' : 'Reporte cerrado.'
+    });
   } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
     if (missingSchema(error)) return schemaError(res);
     console.error(error);
     res.status(500).json({ message: 'No se pudo actualizar el reporte.' });
+  } finally {
+    connection?.release();
   }
 });
 
