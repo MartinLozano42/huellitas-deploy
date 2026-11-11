@@ -28,6 +28,34 @@ export default function UserHome() {
   const [pets, setPets] = useState([]);
   const [homeLoading, setHomeLoading] = useState(true);
   const [homeError, setHomeError] = useState('');
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [unreadMessages, setUnreadMessages] = useState(0);
+
+  async function loadCommunicationCounts() {
+    try {
+      const [{ data: notificationData }, { data: conversations }] = await Promise.all([
+        api.get('/user/notificaciones'),
+        api.get('/user/conversaciones')
+      ]);
+      setUnreadNotifications(Number(notificationData.no_leidas || 0));
+      setUnreadMessages((Array.isArray(conversations) ? conversations : []).reduce((sum, item) => sum + Number(item.no_leidos || 0), 0));
+    } catch {
+      // Los indicadores no deben bloquear la navegación si el servicio no responde.
+    }
+  }
+
+  useEffect(() => {
+    loadCommunicationCounts();
+    const timer = window.setInterval(loadCommunicationCounts, 10000);
+    const refresh = () => loadCommunicationCounts();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('huellitas:communication-updated', refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('huellitas:communication-updated', refresh);
+    };
+  }, []);
 
   useEffect(() => {
     if (location.pathname !== '/usuario') return;
@@ -64,6 +92,8 @@ export default function UserHome() {
               >
                 <Icon size={18} />
                 <span>{item.label}</span>
+                {item.to === '/usuario/chat' && unreadMessages > 0 && <span className="user-nav-badge" aria-label={`${unreadMessages} mensajes sin leer`}>{unreadMessages > 99 ? '99+' : unreadMessages}</span>}
+                {item.to === '/usuario/notificaciones' && unreadNotifications > 0 && <span className="user-nav-badge" aria-label={`${unreadNotifications} notificaciones sin leer`}>{unreadNotifications > 99 ? '99+' : unreadNotifications}</span>}
               </NavLink>
             );
           })}
