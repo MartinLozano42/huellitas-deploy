@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, Camera, CheckCircle, MapPin, MessageCircle, PawPrint, ShieldCheck } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  CheckCircle,
+  MapPin,
+  PawPrint,
+  Send,
+  ShieldCheck
+} from 'lucide-react';
 import api, { mediaUrl } from '../api.js';
-
-function readUser() {
-  try { return JSON.parse(localStorage.getItem('prm_user') || '{}'); } catch { return {}; }
-}
 
 export default function PublicQrPage() {
   const { codigo = '' } = useParams();
@@ -13,10 +17,17 @@ export default function PublicQrPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [mensaje, setMensaje] = useState('');
+  const [ubicacion, setUbicacion] = useState('');
+  const [sending, setSending] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [sendError, setSendError] = useState('');
 
   useEffect(() => {
     let active = true;
-    setLoading(true); setError(''); setData(null);
+    setLoading(true);
+    setError('');
+    setData(null);
     api.get(`/public/qr/${encodeURIComponent(codigo)}`)
       .then(({ data: response }) => { if (active) setData(response); })
       .catch((e) => { if (active) setError(e.response?.data?.message || 'No se pudo consultar el código QR.'); })
@@ -24,11 +35,24 @@ export default function PublicQrPage() {
     return () => { active = false; };
   }, [codigo]);
 
-  function continueTo(path) {
-    const token = localStorage.getItem('prm_token');
-    const user = readUser();
-    if (token && user.rol === 'USER') navigate(path);
-    else navigate('/login', { state: { from: path, notice: 'Inicia sesión para contactar al propietario o publicar un reporte.' } });
+  async function sendAnonymousNotice(event) {
+    event.preventDefault();
+    setSending(true);
+    setSendError('');
+    setNotice('');
+    try {
+      const { data: response } = await api.post(
+        `/public/qr/${encodeURIComponent(codigo)}/aviso`,
+        { mensaje: mensaje.trim(), ubicacion: ubicacion.trim() }
+      );
+      setNotice(response.message || 'Aviso enviado correctamente.');
+      setMensaje('');
+      setUbicacion('');
+    } catch (e) {
+      setSendError(e.response?.data?.message || 'No se pudo enviar el aviso. Intenta nuevamente.');
+    } finally {
+      setSending(false);
+    }
   }
 
   if (loading) return <main className="public-qr-shell"><div className="public-qr-card"><div className="loading">Consultando identificación…</div></div></main>;
@@ -36,23 +60,60 @@ export default function PublicQrPage() {
 
   const pet = data.mascota;
   const isLost = pet.estado === 'PERDIDA';
-  return <main className="public-qr-shell">
-    <section className="public-qr-card">
-      <div className="public-qr-brand"><PawPrint size={26}/><div><strong>HUELLITAS</strong><span>Identificación de mascota</span></div></div>
-      <div className="public-qr-intro"><h1>{isLost ? 'Esta mascota está reportada como perdida' : '¿Encontraste una mascota?'}</h1><p>{isLost ? 'Consulta la ficha y ayuda a reunirla con su familia.' : 'Podemos ayudarte a contactar a su familia de forma segura.'}</p></div>
-      <div className="public-qr-pet">
-        <div className="public-qr-photo">{pet.foto ? <img src={mediaUrl(pet.foto)} alt={`Foto de ${pet.nombre}`}/> : <PawPrint size={44}/>}</div>
-        <div><span className={`report-type-pill ${isLost ? 'lost' : 'found'}`}>{isLost ? 'REPORTE DE PÉRDIDA ACTIVO' : 'QR HUELLITAS ACTIVO'}</span><h2>{pet.nombre}</h2><p>{[pet.especie, pet.raza, pet.sexo, pet.edad != null ? `${pet.edad} años` : ''].filter(Boolean).join(' · ')}</p></div>
-      </div>
-      <div className="public-qr-info"><ShieldCheck size={18}/><p>Por privacidad, Huellitas no muestra públicamente el teléfono, correo ni domicilio del propietario. Usa el chat seguro para comunicarte.</p></div>
-      {pet.caracteristicas && <div className="public-qr-description"><strong>Características</strong><p>{pet.caracteristicas}</p></div>}
-      {isLost && <div className="alert error"><AlertTriangle size={16}/> Esta mascota tiene un reporte de pérdida activo. Si conoces su ubicación, informa al propietario.</div>}
-      <div className="public-qr-actions">
-        <button className="primary-button full" onClick={() => continueTo(`/usuario/chat?codigo=${encodeURIComponent(data.codigo || codigo)}`)}><MessageCircle size={17}/>Iniciar chat seguro en Huellitas</button>
-        <button className="secondary-button full" onClick={() => continueTo(`/usuario/reportar?tipo=ENCONTRADA&mascota_id=${encodeURIComponent(pet.id)}`)}><MapPin size={17}/>Reportar que la encontré</button>
-        <button className="secondary-button full" onClick={() => continueTo('/usuario/reportar?tipo=ENCONTRADA')}><Camera size={17}/>Reportar un hallazgo manualmente</button>
-      </div>
-      <p className="public-qr-footer"><CheckCircle size={15}/> Identificación consultada de forma segura.</p>
-    </section>
-  </main>;
+
+  return (
+    <main className="public-qr-shell">
+      <section className="public-qr-card">
+        <div className="public-qr-brand"><PawPrint size={26}/><div><strong>HUELLITAS</strong><span>Identificación de mascota</span></div></div>
+        <div className="public-qr-intro">
+          <h1>{isLost ? 'Esta mascota está reportada como perdida' : 'Identificación de mascota'}</h1>
+          <p>Consulta sus datos y, si tienes información, envía un aviso sin crear una cuenta.</p>
+        </div>
+
+        <div className="public-qr-pet">
+          <div className="public-qr-photo">{pet.foto ? <img src={mediaUrl(pet.foto)} alt={`Foto de ${pet.nombre}`}/> : <PawPrint size={44}/>}</div>
+          <div>
+            <span className={`report-type-pill ${isLost ? 'lost' : 'found'}`}>{isLost ? 'REPORTE DE PÉRDIDA ACTIVO' : 'QR HUELLITAS ACTIVO'}</span>
+            <h2>{pet.nombre}</h2>
+            <p>{[pet.especie, pet.raza, pet.sexo, pet.edad != null ? `${pet.edad} años` : ''].filter(Boolean).join(' · ')}</p>
+          </div>
+        </div>
+
+        {pet.caracteristicas && <div className="public-qr-description"><strong>Características</strong><p>{pet.caracteristicas}</p></div>}
+        {isLost && <div className="alert error"><AlertTriangle size={16}/> Esta mascota tiene un reporte de pérdida activo.</div>}
+
+        <div className="public-qr-info"><ShieldCheck size={18}/><p>Tu aviso se enviará de forma anónima al propietario y al equipo administrador. No solicitamos tu nombre, teléfono ni correo.</p></div>
+
+        <form className="public-qr-notice-form" onSubmit={sendAnonymousNotice}>
+          <h3>¿Tienes información sobre esta mascota?</h3>
+          <label htmlFor="qr-notice-message">Tu aviso</label>
+          <textarea
+            id="qr-notice-message"
+            value={mensaje}
+            onChange={(e) => setMensaje(e.target.value)}
+            minLength={5}
+            maxLength={1000}
+            rows={4}
+            placeholder="Ej.: La vi cerca de la plaza principal. Está caminando por la zona…"
+            required
+          />
+          <label htmlFor="qr-notice-location">Ubicación aproximada (opcional)</label>
+          <input
+            id="qr-notice-location"
+            value={ubicacion}
+            onChange={(e) => setUbicacion(e.target.value)}
+            maxLength={180}
+            placeholder="Ej.: Plaza principal, zona norte"
+          />
+          {sendError && <div className="alert error">{sendError}</div>}
+          {notice && <div className="alert success"><CheckCircle size={17}/>{notice}</div>}
+          <button className="primary-button full" type="submit" disabled={sending || mensaje.trim().length < 5}>
+            <Send size={17}/>{sending ? 'Enviando aviso…' : 'Enviar aviso anónimo'}
+          </button>
+        </form>
+
+        <p className="public-qr-footer"><CheckCircle size={15}/> No necesitas iniciar sesión para enviar este aviso.</p>
+      </section>
+    </main>
+  );
 }
