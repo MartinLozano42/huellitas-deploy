@@ -498,3 +498,64 @@ button, a { touch-action: manipulation; }
 .public-qr-notice-form textarea:focus, .public-qr-notice-form input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(42, 145, 165, .12); }
 .public-qr-notice-form .full { justify-content: center; min-height: 45px; margin-top: 4px; }
 .public-qr-notice-form .alert { display: flex; align-items: flex-start; gap: 8px; }
+
+
+/* Contadores de notificaciones y mensajes */
+.user-header-notification-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  color: #fff;
+  background: #e34f59;
+  font-size: 9px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.user-header-right .icon-button {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.user-nav-badge {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 999px;
+  color: #fff;
+  background: #e34f59;
+  font-size: 9px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.user-nav-item.active .user-nav-badge {
+  background: var(--primary-dark);
+}
+
+@media (max-width: 480px) {
+  .user-header-notification-badge {
+    top: -5px;
+    right: -5px;
+    min-width: 17px;
+    height: 17px;
+  }
+
+  .user-nav-badge {
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 8px;
+  }
+}
