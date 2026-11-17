@@ -6,7 +6,8 @@ import {
   Image as ImageIcon,
   Pencil,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  Trash2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api, { mediaUrl } from '../api.js';
@@ -21,6 +22,7 @@ export default function UserMascotas() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [requestingQr, setRequestingQr] = useState(null);
+  const [deletingPet, setDeletingPet] = useState(null);
 
   const load = useCallback(async (showRefresh = false) => {
     if (showRefresh) {
@@ -55,7 +57,7 @@ export default function UserMascotas() {
   }, [load]);
 
   async function requestQr(id) {
-    if (!id || requestingQr !== null) return;
+    if (!id || requestingQr !== null || deletingPet !== null) return;
 
     setMessage('');
     setError('');
@@ -64,16 +66,54 @@ export default function UserMascotas() {
     try {
       const { data } = await api.post(`/user/mascotas/${id}/qr`);
 
-      setMessage(data?.message || 'La solicitud de identificación QR fue enviada correctamente.');
+      setMessage(
+        data?.message ||
+        'La solicitud de identificación QR fue enviada correctamente.'
+      );
 
       await load(true);
     } catch (e) {
       setError(
         e.response?.data?.message ||
-        'No se pudo solicitar la identificación QR. Inténtalo nuevamente.'
+        'No se pudo solicitar la identificación QR.'
       );
     } finally {
       setRequestingQr(null);
+    }
+  }
+
+  async function deletePet(pet) {
+    if (!pet?.id || deletingPet !== null || requestingQr !== null) return;
+
+    const confirmed = window.confirm(
+      `¿Estás seguro de que deseas eliminar a ${pet.nombre}?\n\n` +
+      'Esta acción no se puede deshacer. Si tiene identificaciones QR, ' +
+      'reportes o avistamientos relacionados, el sistema protegerá su historial y rechazará la eliminación.'
+    );
+
+    if (!confirmed) return;
+
+    setError('');
+    setMessage('');
+    setDeletingPet(pet.id);
+
+    try {
+      const { data } = await api.delete(`/user/mascotas/${pet.id}`);
+
+      setMessage(
+        data?.message || 'Mascota eliminada correctamente.'
+      );
+
+      setRows((current) =>
+        current.filter((item) => String(item.id) !== String(pet.id))
+      );
+    } catch (e) {
+      setError(
+        e.response?.data?.message ||
+        'No se pudo eliminar la mascota.'
+      );
+    } finally {
+      setDeletingPet(null);
     }
   }
 
@@ -172,14 +212,16 @@ export default function UserMascotas() {
         <>
           <div className="user-pets-toolbar">
             <span>
-              {rows.length} {rows.length === 1 ? 'mascota registrada' : 'mascotas registradas'}
+              {rows.length} {rows.length === 1
+                ? 'mascota registrada'
+                : 'mascotas registradas'}
             </span>
 
             <button
               type="button"
               className="secondary-button compact"
               onClick={() => load(true)}
-              disabled={refreshing}
+              disabled={refreshing || deletingPet !== null}
             >
               <RefreshCw
                 size={15}
@@ -266,13 +308,27 @@ export default function UserMascotas() {
                       type="button"
                       className="primary-button compact"
                       onClick={() => requestQr(m.id)}
-                      disabled={requestingQr !== null}
+                      disabled={requestingQr !== null || deletingPet !== null}
                     >
                       <QrCode size={15} />
 
                       {requestingQr === m.id
                         ? 'Solicitando...'
                         : 'Solicitar QR'}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="secondary-button compact"
+                      onClick={() => deletePet(m)}
+                      disabled={deletingPet !== null || requestingQr !== null}
+                      title={`Eliminar a ${m.nombre}`}
+                    >
+                      <Trash2 size={15} />
+
+                      {deletingPet === m.id
+                        ? 'Eliminando...'
+                        : 'Eliminar'}
                     </button>
                   </div>
                 </div>
