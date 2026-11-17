@@ -559,3 +559,90 @@ button, a { touch-action: manipulation; }
     font-size: 8px;
   }
 }
+
+/* Filtros de notificaciones */
+.notification-filters {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 12px;
+  margin-bottom: 16px;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.notification-filters button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 0 15px;
+  border: 1px solid #dce9ed;
+  border-radius: 10px;
+  color: #607680;
+  background: #f8fbfc;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+  transition: background .2s ease, border-color .2s ease,
+              color .2s ease, transform .2s ease;
+}
+
+.notification-filters button:hover {
+  border-color: #9bcfdd;
+  color: #197f9c;
+  background: #eff9fc;
+  transform: translateY(-1px);
+}
+
+.notification-filters button.selected {
+  border-color: #259bb8;
+  color: #fff;
+  background: #259bb8;
+  box-shadow: 0 3px 9px rgba(37, 155, 184, .16);
+}
+
+.notification-filters button span {
+  display: inline-flex;
+  min-width: 21px;
+  height: 21px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 7px;
+  color: #52717c;
+  background: #e7f1f4;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.notification-filters button.selected span {
+  color: #197f9c;
+  background: #fff;
+}
+
+@media (max-width: 480px) {
+  .notification-filters {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    padding: 9px;
+  }
+
+  .notification-filters button {
+    min-width: 0;
+    min-height: 42px;
+    gap: 5px;
+    padding: 0 6px;
+    font-size: 10px;
+  }
+
+  .notification-filters button span {
+    min-width: 18px;
+    height: 18px;
+    font-size: 9px;
+  }
+}
