@@ -18,43 +18,23 @@ const VALID_REPORT_STATES = ['RESUELTO', 'CERRADO'];
 
 function cleanText(value, maxLength) {
   if (value === null || value === undefined) return '';
-
-  if (typeof value !== 'string' && typeof value !== 'number') {
-    return '';
-  }
-
+  if (typeof value !== 'string' && typeof value !== 'number') return '';
   return String(value).trim().slice(0, maxLength);
 }
 
 function numberOrNull(value) {
-  if (value === '' || value === null || value === undefined) {
-    return null;
-  }
-
-  if (typeof value !== 'number' && typeof value !== 'string') {
-    return NaN;
-  }
-
-  if (typeof value === 'string' && !value.trim()) {
-    return null;
-  }
+  if (value === '' || value === null || value === undefined) return null;
+  if (typeof value !== 'number' && typeof value !== 'string') return NaN;
+  if (typeof value === 'string' && !value.trim()) return null;
 
   const number = Number(value);
-
   return Number.isFinite(number) ? number : NaN;
 }
 
 function validId(value) {
-  if (
-    value === null ||
-    value === undefined ||
-    value === ''
-  ) {
-    return null;
-  }
+  if (value === null || value === undefined || value === '') return null;
 
   const id = Number(value);
-
   return Number.isSafeInteger(id) && id > 0 ? id : NaN;
 }
 
@@ -69,7 +49,7 @@ function validImage(value) {
 
 function schemaError(res) {
   return res.status(503).json({
-    message: 'Falta aplicar la migración de Sprint 3. Ejecuta database/migration_sprint3_comunicacion_reportes.sql en MySQL.'
+    message: 'Falta aplicar la migración de Sprint 3. Revisa el esquema de la base de datos.'
   });
 }
 
@@ -262,41 +242,23 @@ router.get('/reportes', async (req, res) => {
 
 router.post('/reportes', async (req, res) => {
   const tipo = cleanText(req.body?.tipo, 20).toUpperCase();
-
   const mascotaId = validId(req.body?.mascota_id);
 
-  const nombre = cleanText(
-    req.body?.nombre_mascota,
-    100
-  ).replace(/\s+/g, ' ');
+  const nombre = cleanText(req.body?.nombre_mascota, 100)
+    .replace(/\s+/g, ' ');
 
-  const especie = cleanText(
-    req.body?.especie_mascota,
-    20
-  ).toUpperCase();
-
+  const especie = cleanText(req.body?.especie_mascota, 20).toUpperCase();
   const raza = cleanText(req.body?.raza_mascota, 100) || null;
-
-  const sexo = cleanText(
-    req.body?.sexo_mascota,
-    20
-  ).toUpperCase() || null;
-
+  const sexo = cleanText(req.body?.sexo_mascota, 20).toUpperCase() || null;
   const edad = numberOrNull(req.body?.edad_mascota);
 
-  const descripcion = cleanText(
-    req.body?.descripcion,
-    4000
-  ) || null;
+  const descripcion = cleanText(req.body?.descripcion, 4000) || null;
 
-  const ubicacion = cleanText(
-    req.body?.ubicacion,
-    255
-  ).replace(/\s+/g, ' ');
+  const ubicacion = cleanText(req.body?.ubicacion, 255)
+    .replace(/\s+/g, ' ');
 
   const latitud = numberOrNull(req.body?.latitud);
   const longitud = numberOrNull(req.body?.longitud);
-
   const foto = cleanText(req.body?.foto, 500) || null;
 
   if (!VALID_TYPES.includes(tipo)) {
@@ -317,9 +279,7 @@ router.post('/reportes', async (req, res) => {
     });
   }
 
-  if (!validateCoordinates(latitud, longitud, res)) {
-    return;
-  }
+  if (!validateCoordinates(latitud, longitud, res)) return;
 
   if (!validImage(foto)) {
     return res.status(400).json({
@@ -339,15 +299,7 @@ router.post('/reportes', async (req, res) => {
 
       const [pets] = await pool.query(
         `SELECT
-          id,
-          usuario_id,
-          nombre,
-          especie,
-          raza,
-          sexo,
-          edad,
-          foto,
-          estado
+          id, usuario_id, nombre, especie, raza, sexo, edad, foto, estado
          FROM mascotas
          WHERE id=? AND usuario_id=?
          LIMIT 1`,
@@ -381,15 +333,7 @@ router.post('/reportes', async (req, res) => {
     } else if (mascotaId) {
       const [pets] = await pool.query(
         `SELECT
-          id,
-          usuario_id,
-          nombre,
-          especie,
-          raza,
-          sexo,
-          edad,
-          foto,
-          estado
+          id, usuario_id, nombre, especie, raza, sexo, edad, foto, estado
          FROM mascotas
          WHERE id=?
          LIMIT 1`,
@@ -501,44 +445,60 @@ router.post('/reportes', async (req, res) => {
       );
     }
 
-    await broadcastReportNotification({
-      excludeUserId: req.user.id,
-      excludeAlso:
-        tipo === 'ENCONTRADA' &&
-        pet?.usuario_id &&
-        Number(pet.usuario_id) !== Number(req.user.id)
-          ? [pet.usuario_id]
-          : [],
-      type: tipo,
-      reportId: result.insertId,
-      petName,
-      location: ubicacion,
-      latitud,
-      longitud
-    });
+    // Las notificaciones son secundarias: un fallo aquí no debe
+    // convertir una publicación exitosa en un error para el usuario.
+    try {
+      await broadcastReportNotification({
+        excludeUserId: req.user.id,
+        excludeAlso:
+          tipo === 'ENCONTRADA' &&
+          pet?.usuario_id &&
+          Number(pet.usuario_id) !== Number(req.user.id)
+            ? [pet.usuario_id]
+            : [],
+        type: tipo,
+        reportId: result.insertId,
+        petName,
+        location: ubicacion,
+        latitud,
+        longitud
+      });
+    } catch (notificationError) {
+      console.warn(
+        '[REPORTES] No se pudieron enviar las notificaciones generales:',
+        notificationError
+      );
+    }
 
     if (
       tipo === 'ENCONTRADA' &&
       pet?.usuario_id &&
       Number(pet.usuario_id) !== Number(req.user.id)
     ) {
-      await pool.query(
-        `INSERT INTO notificaciones
-          (usuario_id, tipo, titulo, mensaje)
-         VALUES (
-           ?,
-           'MASCOTA_ENCONTRADA',
-           'Posible hallazgo de tu mascota',
-           ?
-         )`,
-        [
-          pet.usuario_id,
-          `Se registró un hallazgo relacionado con ${petName} en ${ubicacion}. Revisa Huellitas (reporte #${result.insertId}).`
-        ]
-      );
+      try {
+        await pool.query(
+          `INSERT INTO notificaciones
+            (usuario_id, tipo, titulo, mensaje)
+           VALUES (
+             ?,
+             'MASCOTA_ENCONTRADA',
+             'Posible hallazgo de tu mascota',
+             ?
+           )`,
+          [
+            pet.usuario_id,
+            `Se registró un hallazgo relacionado con ${petName} en ${ubicacion}. Revisa Huellitas (reporte #${result.insertId}).`
+          ]
+        );
+      } catch (notificationError) {
+        console.warn(
+          '[REPORTES] No se pudo notificar al propietario:',
+          notificationError
+        );
+      }
     }
 
-    res.status(201).json({
+    return res.status(201).json({
       message: tipo === 'PERDIDA'
         ? 'Aviso de mascota perdida publicado.'
         : 'Reporte de hallazgo publicado.',
@@ -549,7 +509,7 @@ router.post('/reportes', async (req, res) => {
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudo publicar el reporte.'
     });
   }
@@ -604,17 +564,17 @@ router.get('/reportes/:id/avistamientos', async (req, res) => {
       [reportId]
     );
 
-    res.json(rows);
+    return res.json(rows);
   } catch (error) {
     if (missingSchema(error)) {
       return res.status(503).json({
-        message: 'Falta crear la tabla de avistamientos. Ejecuta database/migration_sprint3_avistamientos.sql.'
+        message: 'Falta crear la tabla de avistamientos. Revisa database/migration_sprint3_avistamientos.sql.'
       });
     }
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudieron cargar los avistamientos.'
     });
   }
@@ -633,19 +593,12 @@ router.post('/reportes/:id/avistamientos', async (req, res) => {
     });
   }
 
-  const ubicacion = cleanText(
-    req.body?.ubicacion,
-    255
-  ).replace(/\s+/g, ' ');
+  const ubicacion = cleanText(req.body?.ubicacion, 255)
+    .replace(/\s+/g, ' ');
 
-  const descripcion = cleanText(
-    req.body?.descripcion,
-    2000
-  ) || null;
-
+  const descripcion = cleanText(req.body?.descripcion, 2000) || null;
   const latitud = numberOrNull(req.body?.latitud);
   const longitud = numberOrNull(req.body?.longitud);
-
   const foto = cleanText(req.body?.foto, 500) || null;
 
   if (!ubicacion) {
@@ -654,9 +607,7 @@ router.post('/reportes/:id/avistamientos', async (req, res) => {
     });
   }
 
-  if (!validateCoordinates(latitud, longitud, res)) {
-    return;
-  }
+  if (!validateCoordinates(latitud, longitud, res)) return;
 
   if (!validImage(foto)) {
     return res.status(400).json({
@@ -725,35 +676,43 @@ router.post('/reportes/:id/avistamientos', async (req, res) => {
       ]
     );
 
-    await pool.query(
-      `INSERT INTO notificaciones
-        (usuario_id, tipo, titulo, mensaje)
-       VALUES (
-         ?,
-         'AVISTAMIENTO',
-         'Nuevo avistamiento de tu mascota',
-         ?
-       )`,
-      [
-        report.usuario_id,
-        `Alguien informó haber visto a ${report.mascota} en ${ubicacion}. Revisa el aviso y contacta a la persona en Huellitas.`
-      ]
-    );
+    // El avistamiento queda guardado aunque falle la notificación.
+    try {
+      await pool.query(
+        `INSERT INTO notificaciones
+          (usuario_id, tipo, titulo, mensaje)
+         VALUES (
+           ?,
+           'AVISTAMIENTO',
+           'Nuevo avistamiento de tu mascota',
+           ?
+         )`,
+        [
+          report.usuario_id,
+          `Alguien informó haber visto a ${report.mascota} en ${ubicacion}. Revisa el aviso y contacta a la persona en Huellitas.`
+        ]
+      );
+    } catch (notificationError) {
+      console.warn(
+        '[AVISTAMIENTOS] No se pudo notificar al propietario:',
+        notificationError
+      );
+    }
 
-    res.status(201).json({
+    return res.status(201).json({
       message: 'Avistamiento enviado al propietario.',
       avistamiento_id: result.insertId
     });
   } catch (error) {
     if (missingSchema(error)) {
       return res.status(503).json({
-        message: 'Falta crear la tabla de avistamientos. Ejecuta database/migration_sprint3_avistamientos.sql.'
+        message: 'Falta crear la tabla de avistamientos. Revisa database/migration_sprint3_avistamientos.sql.'
       });
     }
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudo registrar el avistamiento.'
     });
   }
@@ -766,10 +725,7 @@ router.post('/reportes/:id/avistamientos', async (req, res) => {
 router.patch('/reportes/:id/estado', async (req, res) => {
   const reportId = validId(req.params.id);
 
-  const estado = cleanText(
-    req.body?.estado,
-    20
-  ).toUpperCase();
+  const estado = cleanText(req.body?.estado, 20).toUpperCase();
 
   if (!reportId) {
     return res.status(400).json({
@@ -787,7 +743,6 @@ router.patch('/reportes/:id/estado', async (req, res) => {
 
   try {
     connection = await pool.getConnection();
-
     await connection.beginTransaction();
 
     const [rows] = await connection.query(
@@ -852,7 +807,7 @@ router.patch('/reportes/:id/estado', async (req, res) => {
 
     await connection.commit();
 
-    res.json({
+    return res.json({
       message:
         report.tipo === 'PERDIDA' && estado === 'RESUELTO'
           ? '¡Qué alegría! La mascota volvió a estar EN CASA y el aviso quedó resuelto.'
@@ -869,7 +824,7 @@ router.patch('/reportes/:id/estado', async (req, res) => {
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudo actualizar el reporte.'
     });
   } finally {
