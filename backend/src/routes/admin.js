@@ -159,14 +159,14 @@ function sendValidationError(res, error) {
 router.get('/dashboard', async (_req, res) => {
   try {
     const [
-      [users],
-      [pendingUsers],
-      [pets],
-      [lost],
-      [found],
-      [qr],
-      [activeReports],
-      [resolvedReports]
+      usersRows,
+      pendingUsersRows,
+      petsRows,
+      lostRows,
+      foundRows,
+      qrRows,
+      activeReportsRows,
+      resolvedReportsRows
     ] = await Promise.all([
       pool.query(`
         SELECT COUNT(*) AS total_usuarios
@@ -232,19 +232,26 @@ router.get('/dashboard', async (_req, res) => {
       LIMIT 6
     `);
 
+    const metrics = {
+      ...usersRows[0][0],
+      ...pendingUsersRows[0][0],
+      ...petsRows[0][0],
+      ...lostRows[0][0],
+      ...foundRows[0][0],
+      ...qrRows[0][0],
+      ...activeReportsRows[0][0],
+      ...resolvedReportsRows[0][0]
+    };
+
+    for (const key of Object.keys(metrics)) {
+      metrics[key] = Number(metrics[key] || 0);
+    }
+
     res.json({
-      metrics: {
-        ...users,
-        ...pendingUsers,
-        ...pets,
-        ...lost,
-        ...found,
-        ...qr,
-        ...activeReports,
-        ...resolvedReports
-      },
+      metrics,
       recentUsers
     });
+
   } catch (error) {
     sendServerError(
       res,
