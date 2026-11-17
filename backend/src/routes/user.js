@@ -26,9 +26,7 @@ const SUCURSALES = [
   'Sucursal Sur'
 ];
 
-// Permite letras, tildes, espacios, apóstrofes y guiones.
-// No permite números ni símbolos extraños.
-const PET_NAME_RE = /^[\p{L}][\p{L}\s'-]{0,99}$/u;
+const PET_NAME_RE = /^[\p{L}]+(?:[ '-][\p{L}]+)*$/u;
 
 function cleanText(value, maxLength = 255) {
   if (value === null || value === undefined) return '';
@@ -66,7 +64,7 @@ function validatePet(pet) {
   }
 
   if (!PET_NAME_RE.test(pet.nombre)) {
-    return 'El nombre debe contener únicamente letras, espacios, guiones o apóstrofes.';
+    return 'El nombre debe contener letras y puede incluir espacios, guiones o apóstrofes entre palabras.';
   }
 
   if (!ESPECIES.includes(pet.especie)) {
@@ -93,10 +91,7 @@ function validatePet(pet) {
     return 'La raza no puede superar los 100 caracteres.';
   }
 
-  if (
-    pet.caracteristicas &&
-    pet.caracteristicas.length > 1000
-  ) {
+  if (pet.caracteristicas && pet.caracteristicas.length > 1000) {
     return 'Las características no pueden superar los 1000 caracteres.';
   }
 
@@ -115,15 +110,8 @@ router.get('/perfil', async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT
-        id,
-        nombre,
-        apellido,
-        ci,
-        email,
-        telefono,
-        foto,
-        rol,
-        estado
+        id, nombre, apellido, ci, email,
+        telefono, foto, rol, estado
        FROM usuarios
        WHERE id = ?
        LIMIT 1`,
@@ -137,7 +125,6 @@ router.get('/perfil', async (req, res) => {
     }
 
     res.json(rows[0]);
-
   } catch (error) {
     console.error('Error al cargar perfil:', error);
 
@@ -155,17 +142,8 @@ router.get('/mascotas', async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT
-        id,
-        nombre,
-        especie,
-        raza,
-        sexo,
-        edad,
-        foto,
-        vacunado,
-        caracteristicas,
-        estado,
-        created_at
+        id, nombre, especie, raza, sexo, edad,
+        foto, vacunado, caracteristicas, estado, created_at
        FROM mascotas
        WHERE usuario_id = ?
        ORDER BY created_at DESC`,
@@ -173,7 +151,6 @@ router.get('/mascotas', async (req, res) => {
     );
 
     res.json(rows);
-
   } catch (error) {
     console.error('Error al listar mascotas:', error);
 
@@ -200,16 +177,8 @@ router.post('/mascotas', async (req, res) => {
 
     const [result] = await pool.query(
       `INSERT INTO mascotas (
-        usuario_id,
-        nombre,
-        especie,
-        raza,
-        sexo,
-        edad,
-        foto,
-        vacunado,
-        caracteristicas,
-        estado
+        usuario_id, nombre, especie, raza, sexo,
+        edad, foto, vacunado, caracteristicas, estado
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'EN_CASA')`,
       [
@@ -237,7 +206,6 @@ router.post('/mascotas', async (req, res) => {
       message: 'Mascota registrada correctamente.',
       mascota: rows[0]
     });
-
   } catch (error) {
     console.error('Error al registrar mascota:', error);
 
@@ -272,17 +240,9 @@ router.put('/mascotas/:id', async (req, res) => {
 
     const [result] = await pool.query(
       `UPDATE mascotas
-       SET
-        nombre = ?,
-        especie = ?,
-        raza = ?,
-        sexo = ?,
-        edad = ?,
-        foto = ?,
-        vacunado = ?,
-        caracteristicas = ?
-       WHERE id = ?
-       AND usuario_id = ?`,
+       SET nombre = ?, especie = ?, raza = ?, sexo = ?,
+           edad = ?, foto = ?, vacunado = ?, caracteristicas = ?
+       WHERE id = ? AND usuario_id = ?`,
       [
         pet.nombre,
         pet.especie,
@@ -325,13 +285,135 @@ router.put('/mascotas/:id', async (req, res) => {
       message: 'Mascota actualizada correctamente.',
       mascota: rows[0]
     });
-
   } catch (error) {
     console.error('Error al actualizar mascota:', error);
 
     res.status(500).json({
       message: 'No se pudo actualizar la mascota.'
     });
+  }
+});
+
+// ======================================================
+// ELIMINAR MASCOTA DESDE LA CUENTA DEL PROPIETARIO
+// ======================================================
+
+router.delete('/mascotas/:id', async (req, res) => {
+  const id = validId(req.params.id);
+
+  if (!id) {
+    return res.status(400).json({
+      message: 'Identificador de mascota inválido.'
+    });
+  }
+
+  let connection;
+
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    // Comprobar que la mascota pertenece al usuario autenticado.
+    const [pets] = await connection.query(
+      `SELECT id, nombre
+       FROM mascotas
+       WHERE id = ? AND usuario_id = ?
+       FOR UPDATE`,
+      [id, req.user.id]
+    );
+
+    if (!pets[0]) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        message: 'Mascota no encontrada o no tienes permiso para eliminarla.'
+      });
+    }
+
+    // Comprobar registros relacionados.
+    const [[qrCount]] = await connection.query(
+      `SELECT COUNT(*) AS total
+       FROM identificaciones_qr
+       WHERE mascota_id = ?`,
+      [id]
+    );
+
+    const [[reportCount]] = await connection.query(
+      `SELECT COUNT(*) AS total
+       FROM reportes
+       WHERE mascota_id = ?`,
+      [id]
+    );
+
+    const [[sightingCount]] = await connection.query(
+      `SELECT COUNT(*) AS total
+       FROM avistamientos
+       WHERE mascota_id = ?`,
+      [id]
+    );
+
+    const dependencias = {
+      qr: Number(qrCount.total),
+      reportes: Number(reportCount.total),
+      avistamientos: Number(sightingCount.total)
+    };
+
+    if (
+      dependencias.qr > 0 ||
+      dependencias.reportes > 0 ||
+      dependencias.avistamientos > 0
+    ) {
+      await connection.rollback();
+
+      return res.status(409).json({
+        message: 'No se puede eliminar esta mascota porque tiene identificaciones QR, reportes o avistamientos relacionados. Se debe conservar su historial.',
+        dependencias
+      });
+    }
+
+    // Las conversaciones conservan sus mensajes.
+    // Su relación con la mascota permite quedar en NULL.
+
+    const [result] = await connection.query(
+      `DELETE FROM mascotas
+       WHERE id = ? AND usuario_id = ?`,
+      [id, req.user.id]
+    );
+
+    if (!result.affectedRows) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        message: 'No se pudo encontrar la mascota para eliminar.'
+      });
+    }
+
+    await connection.commit();
+
+    res.json({
+      message: 'Mascota eliminada correctamente.',
+      id
+    });
+  } catch (error) {
+    if (connection) {
+      await connection.rollback().catch(() => {});
+    }
+
+    console.error('Error al eliminar mascota:', error);
+
+    if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+      return res.status(409).json({
+        message: 'No se puede eliminar la mascota porque existen registros relacionados.'
+      });
+    }
+
+    res.status(500).json({
+      message: 'No se pudo eliminar la mascota.'
+    });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
   }
 });
 
@@ -351,17 +433,8 @@ router.get('/mascotas/:id', async (req, res) => {
 
     const [rows] = await pool.query(
       `SELECT
-        id,
-        nombre,
-        especie,
-        raza,
-        sexo,
-        edad,
-        foto,
-        vacunado,
-        caracteristicas,
-        estado,
-        created_at
+        id, nombre, especie, raza, sexo, edad,
+        foto, vacunado, caracteristicas, estado, created_at
        FROM mascotas
        WHERE id = ? AND usuario_id = ?
        LIMIT 1`,
@@ -376,12 +449,8 @@ router.get('/mascotas/:id', async (req, res) => {
 
     const [qrs] = await pool.query(
       `SELECT
-        id,
-        codigo,
-        estado,
-        archivo_qr,
-        solicitado_at,
-        aprobado_at
+        id, codigo, estado, archivo_qr,
+        solicitado_at, aprobado_at
        FROM identificaciones_qr
        WHERE mascota_id = ?
        ORDER BY created_at DESC`,
@@ -392,7 +461,6 @@ router.get('/mascotas/:id', async (req, res) => {
       ...rows[0],
       qrs
     });
-
   } catch (error) {
     console.error('Error al consultar mascota:', error);
 
@@ -410,18 +478,11 @@ router.get('/qr', async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT
-        q.id,
-        q.codigo,
-        q.estado,
-        q.archivo_qr,
-        q.solicitado_at,
-        q.aprobado_at,
-        q.pickup_sucursal,
-        q.pickup_solicitado_at,
-        m.id AS mascota_id,
-        m.nombre AS mascota,
-        m.especie,
-        m.raza
+        q.id, q.codigo, q.estado, q.archivo_qr,
+        q.solicitado_at, q.aprobado_at,
+        q.pickup_sucursal, q.pickup_solicitado_at,
+        m.id AS mascota_id, m.nombre AS mascota,
+        m.especie, m.raza
        FROM identificaciones_qr q
        INNER JOIN mascotas m ON m.id = q.mascota_id
        WHERE m.usuario_id = ?
@@ -430,7 +491,6 @@ router.get('/qr', async (req, res) => {
     );
 
     res.json(rows);
-
   } catch (error) {
     console.error('Error al listar QR:', error);
 
@@ -463,12 +523,9 @@ router.patch('/qr/:id/recogida', async (req, res) => {
 
     const [rows] = await pool.query(
       `SELECT
-        q.id,
-        q.estado,
-        q.codigo,
+        q.id, q.estado, q.codigo,
         m.nombre AS mascota,
-        u.nombre,
-        u.apellido
+        u.nombre, u.apellido
        FROM identificaciones_qr q
        INNER JOIN mascotas m ON m.id = q.mascota_id
        INNER JOIN usuarios u ON u.id = m.usuario_id
@@ -493,25 +550,16 @@ router.patch('/qr/:id/recogida', async (req, res) => {
 
     await pool.query(
       `UPDATE identificaciones_qr
-       SET
-        pickup_sucursal = ?,
-        pickup_solicitado_at = NOW(),
-        pickup_estado = 'PENDIENTE'
+       SET pickup_sucursal = ?,
+           pickup_solicitado_at = NOW(),
+           pickup_estado = 'PENDIENTE'
        WHERE id = ?`,
       [sucursal, qr.id]
     );
 
     const [admins] = await pool.query(
-      `SELECT id
-       FROM usuarios
-       WHERE rol = 'ADMIN'`
+      `SELECT id FROM usuarios WHERE rol = 'ADMIN'`
     );
-
-    const titulo = 'Solicitud de retiro de QR';
-
-    const mensaje =
-      `${qr.nombre} ${qr.apellido} solicita recoger el QR ` +
-      `${qr.codigo} de la mascota ${qr.mascota} en ${sucursal}.`;
 
     if (admins.length) {
       const placeholders = admins.map(() => '(?, ?, ?, ?)').join(', ');
@@ -519,8 +567,8 @@ router.patch('/qr/:id/recogida', async (req, res) => {
       const params = admins.flatMap((admin) => [
         admin.id,
         'QR_RECOGIDA',
-        titulo,
-        mensaje
+        'Solicitud de retiro de QR',
+        `${qr.nombre} ${qr.apellido} solicita recoger el QR ${qr.codigo} de la mascota ${qr.mascota} en ${sucursal}.`
       ]);
 
       await pool.query(
@@ -535,7 +583,6 @@ router.patch('/qr/:id/recogida', async (req, res) => {
       message: `Retiro solicitado en ${sucursal}. El Admin recibió una notificación.`,
       sucursal
     });
-
   } catch (error) {
     console.error('Error al solicitar retiro:', error);
 
@@ -561,9 +608,7 @@ router.get('/qr/:id/imagen', async (req, res) => {
 
     const [rows] = await pool.query(
       `SELECT
-        q.id,
-        q.codigo,
-        q.estado,
+        q.id, q.codigo, q.estado,
         m.nombre AS mascota
        FROM identificaciones_qr q
        INNER JOIN mascotas m ON m.id = q.mascota_id
@@ -608,7 +653,6 @@ router.get('/qr/:id/imagen', async (req, res) => {
       payload,
       qrDataUrl
     });
-
   } catch (error) {
     console.error('Error al generar QR:', error);
 
@@ -688,7 +732,6 @@ router.post('/mascotas/:id/qr', async (req, res) => {
       qr: rows[0],
       mascota: petRows[0]
     });
-
   } catch (error) {
     console.error('Error al solicitar QR:', error);
 
