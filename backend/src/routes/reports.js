@@ -89,15 +89,17 @@ function validateCoordinates(latitud, longitud, res) {
   return true;
 }
 
+// ==========================================
+// NOTIFICACIONES DE REPORTES
+// ==========================================
+
 async function broadcastReportNotification({
   excludeUserId,
   excludeAlso = [],
   type,
   reportId,
   petName,
-  location,
-  latitud,
-  longitud
+  location
 }) {
   const title = type === 'PERDIDA'
     ? 'Nueva mascota perdida'
@@ -115,66 +117,23 @@ async function broadcastReportNotification({
 
   const notIn = excluded.map(() => '?').join(', ');
 
-  const [admins] = await pool.query(
+  const [recipients] = await pool.query(
     `SELECT id
      FROM usuarios
-     WHERE rol='ADMIN'
-       AND id NOT IN (${notIn})`,
+     WHERE id NOT IN (${notIn})
+       AND (
+         rol = 'ADMIN'
+         OR (rol = 'USER' AND estado = 'APROBADO')
+       )`,
     excluded
   );
-
-  let community = [];
-
-  if (latitud !== null && longitud !== null) {
-    const [nearby] = await pool.query(
-      `SELECT p.usuario_id AS id
-       FROM preferencias_alertas_ubicacion p
-       INNER JOIN usuarios u ON u.id=p.usuario_id
-       WHERE p.activo=TRUE
-         AND u.rol='USER'
-         AND u.estado='APROBADO'
-         AND u.id NOT IN (${notIn})
-         AND (
-           6371 * ACOS(
-             LEAST(1, GREATEST(-1,
-               SIN(RADIANS(?)) * SIN(RADIANS(p.latitud)) +
-               COS(RADIANS(?)) * COS(RADIANS(p.latitud)) *
-               COS(RADIANS(p.longitud) - RADIANS(?))
-             ))
-           )
-         ) <= p.radio_km`,
-      [...excluded, latitud, latitud, longitud]
-    );
-
-    community = nearby;
-  } else {
-    const [allApproved] = await pool.query(
-      `SELECT id
-       FROM usuarios
-       WHERE id NOT IN (${notIn})
-         AND (
-           rol='ADMIN'
-           OR (rol='USER' AND estado='APROBADO')
-         )`,
-      excluded
-    );
-
-    community = allApproved;
-  }
-
-  const recipients = [
-    ...new Set([
-      ...admins,
-      ...community
-    ].map((user) => Number(user.id)))
-  ];
 
   if (!recipients.length) return;
 
   const values = recipients.map(() => '(?, ?, ?, ?)').join(', ');
 
-  const params = recipients.flatMap((id) => [
-    id,
+  const params = recipients.flatMap((user) => [
+    user.id,
     'REPORTE_MASCOTA',
     title,
     message
@@ -185,6 +144,10 @@ async function broadcastReportNotification({
       (usuario_id, tipo, titulo, mensaje)
      VALUES ${values}`,
     params
+  );
+
+  console.log(
+    `[NOTIFICACIONES] Reporte #${reportId}: ${recipients.length} destinatarios.`
   );
 }
 
@@ -459,9 +422,7 @@ router.post('/reportes', async (req, res) => {
         type: tipo,
         reportId: result.insertId,
         petName,
-        location: ubicacion,
-        latitud,
-        longitud
+        location: ubicacion
       });
     } catch (notificationError) {
       console.warn(
