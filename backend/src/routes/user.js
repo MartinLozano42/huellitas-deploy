@@ -54,7 +54,13 @@ function normalizePet(body = {}) {
       : Number(body.edad),
     vacunado: cleanText(body.vacunado, 10).toUpperCase(),
     caracteristicas: cleanText(body.caracteristicas, 1000) || null,
-    foto: cleanText(body.foto, 500) || null
+    foto: cleanText(body.foto, 500) || null,
+    mostrar_contacto_qr:
+      body.mostrar_contacto_qr === true ||
+      body.mostrar_contacto_qr === 1 ||
+      body.mostrar_contacto_qr === '1'
+        ? 1
+        : 0
   };
 }
 
@@ -143,7 +149,8 @@ router.get('/mascotas', async (req, res) => {
     const [rows] = await pool.query(
       `SELECT
         id, nombre, especie, raza, sexo, edad,
-        foto, vacunado, caracteristicas, estado, created_at
+        foto, vacunado, caracteristicas, estado,
+        mostrar_contacto_qr, created_at
        FROM mascotas
        WHERE usuario_id = ?
        ORDER BY created_at DESC`,
@@ -178,9 +185,10 @@ router.post('/mascotas', async (req, res) => {
     const [result] = await pool.query(
       `INSERT INTO mascotas (
         usuario_id, nombre, especie, raza, sexo,
-        edad, foto, vacunado, caracteristicas, estado
+        edad, foto, vacunado, caracteristicas,
+        estado, mostrar_contacto_qr
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'EN_CASA')`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'EN_CASA', ?)`,
       [
         req.user.id,
         pet.nombre,
@@ -190,7 +198,8 @@ router.post('/mascotas', async (req, res) => {
         pet.edad,
         pet.foto,
         pet.vacunado,
-        pet.caracteristicas
+        pet.caracteristicas,
+        pet.mostrar_contacto_qr
       ]
     );
 
@@ -241,7 +250,8 @@ router.put('/mascotas/:id', async (req, res) => {
     const [result] = await pool.query(
       `UPDATE mascotas
        SET nombre = ?, especie = ?, raza = ?, sexo = ?,
-           edad = ?, foto = ?, vacunado = ?, caracteristicas = ?
+           edad = ?, foto = ?, vacunado = ?, caracteristicas = ?,
+           mostrar_contacto_qr = ?
        WHERE id = ? AND usuario_id = ?`,
       [
         pet.nombre,
@@ -252,6 +262,7 @@ router.put('/mascotas/:id', async (req, res) => {
         pet.foto,
         pet.vacunado,
         pet.caracteristicas,
+        pet.mostrar_contacto_qr,
         id,
         req.user.id
       ]
@@ -434,7 +445,8 @@ router.get('/mascotas/:id', async (req, res) => {
     const [rows] = await pool.query(
       `SELECT
         id, nombre, especie, raza, sexo, edad,
-        foto, vacunado, caracteristicas, estado, created_at
+        foto, vacunado, caracteristicas, estado,
+        mostrar_contacto_qr, created_at
        FROM mascotas
        WHERE id = ? AND usuario_id = ?
        LIMIT 1`,
