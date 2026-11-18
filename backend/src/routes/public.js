@@ -3,45 +3,16 @@ import pool from '../db.js';
 
 const router = Router();
 
+// Limitador temporal en memoria para reducir spam en avisos públicos por QR.
 const qrNoticeAttempts = new Map();
-
-const MAX_MESSAGE_LENGTH = 1000;
-const MAX_LOCATION_LENGTH = 180;
-
-function cleanText(value, maxLength) {
-  if (typeof value !== 'string' && typeof value !== 'number') {
-    return '';
-  }
-
-  return String(value).trim().slice(0, maxLength);
-}
-
-function validId(value) {
-  if (
-    value === null ||
-    value === undefined ||
-    value === ''
-  ) {
-    return null;
-  }
-
-  const id = Number(value);
-
-  return Number.isSafeInteger(id) && id > 0 ? id : NaN;
-}
-
-function isValidQrCode(value) {
-  return /^[A-Za-z0-9_-]{4,100}$/.test(value);
-}
 
 function isQrNoticeRateLimited(key) {
   const now = Date.now();
   const windowMs = 60 * 1000;
   const maxAttempts = 4;
 
-  const current = (
-    qrNoticeAttempts.get(key) || []
-  ).filter((time) => now - time < windowMs);
+  const current = (qrNoticeAttempts.get(key) || [])
+    .filter((time) => now - time < windowMs);
 
   if (current.length >= maxAttempts) {
     qrNoticeAttempts.set(key, current);
@@ -54,47 +25,9 @@ function isQrNoticeRateLimited(key) {
   return false;
 }
 
-function cleanRateLimitMap() {
-  const now = Date.now();
-  const windowMs = 60 * 1000;
-
-  for (const [key, attempts] of qrNoticeAttempts.entries()) {
-    const validAttempts = attempts.filter(
-      (time) => now - time < windowMs
-    );
-
-    if (!validAttempts.length) {
-      qrNoticeAttempts.delete(key);
-    } else {
-      qrNoticeAttempts.set(key, validAttempts);
-    }
-  }
-}
-
-setInterval(cleanRateLimitMap, 5 * 60 * 1000).unref();
-
-function validateImage(value) {
-  if (!value) return true;
-
-  return (
-    /^https?:\/\/\S+$/i.test(value) ||
-    /^\/uploads\/images\/[A-Za-z0-9._-]+$/.test(value)
-  );
-}
-
-// ==========================================
-// CONSULTAR QR PÚBLICO
-// ==========================================
-
 async function findQr(req, res) {
   try {
-    const codigo = cleanText(req.params.codigo, 100);
-
-    if (!isValidQrCode(codigo)) {
-      return res.status(400).json({
-        message: 'El código QR no tiene un formato válido.'
-      });
-    }
+    const codigo = String(req.params.codigo || '').trim();
 
     const [rows] = await pool.query(
       `SELECT
@@ -109,10 +42,24 @@ async function findQr(req, res) {
         m.foto,
         m.vacunado,
         m.caracteristicas,
-        m.estado AS estado_mascota
+        m.estado AS estado_mascota,
+        m.mostrar_contacto_qr,
+        CASE
+          WHEN m.mostrar_contacto_qr = 1 THEN u.nombre
+          ELSE NULL
+        END AS propietario_nombre,
+        CASE
+          WHEN m.mostrar_contacto_qr = 1 THEN u.apellido
+          ELSE NULL
+        END AS propietario_apellido,
+        CASE
+          WHEN m.mostrar_contacto_qr = 1 THEN u.telefono
+          ELSE NULL
+        END AS propietario_telefono
        FROM identificaciones_qr q
-       INNER JOIN mascotas m ON m.id=q.mascota_id
-       WHERE q.codigo=?
+       INNER JOIN mascotas m ON m.id = q.mascota_id
+       INNER JOIN usuarios u ON u.id = m.usuario_id
+       WHERE q.codigo = ?
        LIMIT 1`,
       [codigo]
     );
@@ -125,11 +72,11 @@ async function findQr(req, res) {
       });
     }
 
-    // Nunca exponer CI, correo, teléfono, domicilio
-    // ni identificadores internos del propietario.
+    const contactoAutorizado = Number(qr.mostrar_contacto_qr) === 1;
 
-    return res.json({
+    res.json({
       codigo: qr.codigo,
+
       mascota: {
         id: qr.mascota_id,
         nombre: qr.nombre,
@@ -141,12 +88,22 @@ async function findQr(req, res) {
         vacunado: qr.vacunado,
         caracteristicas: qr.caracteristicas,
         estado: qr.estado_mascota
-      }
+      },
+
+      contacto: contactoAutorizado
+        ? {
+            nombre: [
+              qr.propietario_nombre,
+              qr.propietario_apellido
+            ].filter(Boolean).join(' '),
+            telefono: qr.propietario_telefono
+          }
+        : null
     });
   } catch (error) {
-    console.error('Error al consultar QR:', error);
+    console.error(error);
 
-    return res.status(500).json({
+    res.status(500).json({
       message: 'No se pudo consultar el QR.'
     });
   }
@@ -154,19 +111,11 @@ async function findQr(req, res) {
 
 router.get('/qr/:codigo', findQr);
 
-// ==========================================
-// AVISO ANÓNIMO MEDIANTE QR
-// ==========================================
-
+// Aviso anónimo desde el QR físico:
+// no requiere cuenta ni guarda datos del visitante.
 router.post('/qr/:codigo/aviso', async (req, res) => {
   try {
-    const codigo = cleanText(req.params.codigo, 100);
-
-    if (!isValidQrCode(codigo)) {
-      return res.status(400).json({
-        message: 'El código QR no tiene un formato válido.'
-      });
-    }
+    const codigo = String(req.params.codigo || '').trim();
 
     const rateKey = `${req.ip || 'unknown'}:${codigo}`;
 
@@ -176,19 +125,24 @@ router.post('/qr/:codigo/aviso', async (req, res) => {
       });
     }
 
-    const mensaje = cleanText(
-      req.body?.mensaje,
-      MAX_MESSAGE_LENGTH
-    );
+    const mensaje = String(req.body?.mensaje || '').trim();
+    const ubicacion = String(req.body?.ubicacion || '').trim();
 
-    const ubicacion = cleanText(
-      req.body?.ubicacion,
-      MAX_LOCATION_LENGTH
-    );
-
-    if (mensaje.length < 5) {
+    if (!mensaje || mensaje.length < 5) {
       return res.status(400).json({
         message: 'Cuéntanos un poco más en el aviso (mínimo 5 caracteres).'
+      });
+    }
+
+    if (mensaje.length > 1000) {
+      return res.status(400).json({
+        message: 'El aviso no puede superar los 1000 caracteres.'
+      });
+    }
+
+    if (ubicacion.length > 180) {
+      return res.status(400).json({
+        message: 'La ubicación no puede superar los 180 caracteres.'
       });
     }
 
@@ -199,9 +153,9 @@ router.post('/qr/:codigo/aviso', async (req, res) => {
         m.nombre,
         m.usuario_id AS propietario_id
        FROM identificaciones_qr q
-       INNER JOIN mascotas m ON m.id=q.mascota_id
-       WHERE q.codigo=?
-         AND q.estado='ACTIVO'
+       INNER JOIN mascotas m ON m.id = q.mascota_id
+       WHERE q.codigo = ?
+         AND q.estado = 'ACTIVO'
        LIMIT 1`,
       [codigo]
     );
@@ -220,29 +174,23 @@ router.post('/qr/:codigo/aviso', async (req, res) => {
       `Mensaje: ${mensaje}`
     ].filter(Boolean).join(' ');
 
+    // Notificar al propietario y a todas las cuentas administradoras.
     const recipients = new Set([
       Number(qr.propietario_id)
     ]);
 
     const [admins] = await pool.query(
-      `SELECT id
-       FROM usuarios
-       WHERE rol='ADMIN'
-         AND estado='APROBADO'`
+      "SELECT id FROM usuarios WHERE rol = 'ADMIN' AND estado = 'APROBADO'"
     );
 
     for (const admin of admins) {
       recipients.add(Number(admin.id));
     }
 
-    const values = [
-      ...recipients
-    ].filter((id) => Number.isSafeInteger(id) && id > 0);
+    const values = [...recipients].filter(Number.isSafeInteger);
 
     if (values.length) {
-      const placeholders = values
-        .map(() => '(?, ?, ?, ?)')
-        .join(', ');
+      const placeholders = values.map(() => '(?, ?, ?, ?)').join(', ');
 
       const params = values.flatMap((userId) => [
         userId,
@@ -253,7 +201,7 @@ router.post('/qr/:codigo/aviso', async (req, res) => {
 
       await pool.query(
         `INSERT INTO notificaciones
-          (usuario_id, tipo, titulo, mensaje)
+         (usuario_id, tipo, titulo, mensaje)
          VALUES ${placeholders}`,
         params
       );
@@ -263,10 +211,7 @@ router.post('/qr/:codigo/aviso', async (req, res) => {
       message: 'Tu aviso fue enviado de forma anónima al propietario y al equipo de Huellitas.'
     });
   } catch (error) {
-    console.error(
-      'Error al procesar aviso anónimo del QR:',
-      error
-    );
+    console.error('Error al procesar aviso anónimo del QR:', error);
 
     return res.status(500).json({
       message: 'No se pudo enviar el aviso. Intenta nuevamente.'
@@ -274,26 +219,13 @@ router.post('/qr/:codigo/aviso', async (req, res) => {
   }
 });
 
-// ==========================================
-// LISTAR REPORTES PÚBLICOS
-// ==========================================
-
+// Avisos públicos: no exponen teléfono, email, CI
+// ni información privada de quien reporta.
 router.get('/reportes', async (req, res) => {
   try {
-    const tipo = cleanText(
-      req.query?.tipo,
-      20
-    ).toUpperCase();
-
-    const search = cleanText(
-      req.query?.q,
-      100
-    );
-
-    const estado = cleanText(
-      req.query?.estado || 'ACTIVO',
-      20
-    ).toUpperCase();
+    const tipo = String(req.query?.tipo || '').trim().toUpperCase();
+    const search = String(req.query?.q || '').trim().slice(0, 100);
+    const estado = String(req.query?.estado || 'ACTIVO').trim().toUpperCase();
 
     const params = [];
 
@@ -318,26 +250,26 @@ router.get('/reportes', async (req, res) => {
         (
           SELECT COUNT(*)
           FROM identificaciones_qr q
-          WHERE q.mascota_id=m.id
-            AND q.estado='ACTIVO'
+          WHERE q.mascota_id = m.id
+            AND q.estado = 'ACTIVO'
         ) AS tiene_qr
       FROM reportes r
-      LEFT JOIN mascotas m ON m.id=r.mascota_id
-      WHERE 1=1
+      LEFT JOIN mascotas m ON m.id = r.mascota_id
+      WHERE 1 = 1
     `;
 
-    if (['ACTIVO', 'RESUELTO', 'CERRADO'].includes(estado)) {
-      sql += ' AND r.estado=?';
+    if (estado && ['ACTIVO', 'RESUELTO', 'CERRADO'].includes(estado)) {
+      sql += ' AND r.estado = ?';
       params.push(estado);
     }
 
-    if (['PERDIDA', 'ENCONTRADA'].includes(tipo)) {
-      sql += ' AND r.tipo=?';
+    if (tipo && ['PERDIDA', 'ENCONTRADA'].includes(tipo)) {
+      sql += ' AND r.tipo = ?';
       params.push(tipo);
     }
 
     if (search) {
-      const query = `%${search}%`;
+      const q = `%${search}%`;
 
       sql += `
         AND (
@@ -348,22 +280,14 @@ router.get('/reportes', async (req, res) => {
         )
       `;
 
-      params.push(
-        query,
-        query,
-        query,
-        query
-      );
+      params.push(q, q, q, q);
     }
 
-    sql += `
-      ORDER BY r.fecha_reporte DESC
-      LIMIT 200
-    `;
+    sql += ' ORDER BY r.fecha_reporte DESC LIMIT 200';
 
     const [rows] = await pool.query(sql, params);
 
-    return res.json(rows);
+    res.json(rows);
   } catch (error) {
     if (['ER_BAD_FIELD_ERROR', 'ER_NO_SUCH_TABLE'].includes(error?.code)) {
       return res.status(503).json({
@@ -373,25 +297,13 @@ router.get('/reportes', async (req, res) => {
 
     console.error(error);
 
-    return res.status(500).json({
+    res.status(500).json({
       message: 'No se pudieron cargar los avisos de Huellitas.'
     });
   }
 });
 
-// ==========================================
-// DETALLE DE REPORTE PÚBLICO
-// ==========================================
-
 router.get('/reportes/:id', async (req, res) => {
-  const reportId = validId(req.params.id);
-
-  if (!reportId) {
-    return res.status(400).json({
-      message: 'El identificador del reporte no es válido.'
-    });
-  }
-
   try {
     const [rows] = await pool.query(
       `SELECT
@@ -412,10 +324,10 @@ router.get('/reportes/:id', async (req, res) => {
         COALESCE(r.edad_mascota, m.edad) AS edad,
         COALESCE(r.foto, m.foto) AS foto_mascota
        FROM reportes r
-       LEFT JOIN mascotas m ON m.id=r.mascota_id
-       WHERE r.id=?
+       LEFT JOIN mascotas m ON m.id = r.mascota_id
+       WHERE r.id = ?
        LIMIT 1`,
-      [reportId]
+      [req.params.id]
     );
 
     if (!rows[0]) {
@@ -424,7 +336,7 @@ router.get('/reportes/:id', async (req, res) => {
       });
     }
 
-    return res.json(rows[0]);
+    res.json(rows[0]);
   } catch (error) {
     if (['ER_BAD_FIELD_ERROR', 'ER_NO_SUCH_TABLE'].includes(error?.code)) {
       return res.status(503).json({
@@ -434,12 +346,11 @@ router.get('/reportes/:id', async (req, res) => {
 
     console.error(error);
 
-    return res.status(500).json({
+    res.status(500).json({
       message: 'No se pudo cargar el aviso.'
     });
   }
 });
 
 export { findQr };
-
 export default router;
