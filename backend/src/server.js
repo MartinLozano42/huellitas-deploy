@@ -9,7 +9,6 @@ import pool from './db.js';
 import communicationRoutes from './routes/communication.js';
 import reportRoutes from './routes/reports.js';
 import mediaRoutes from './routes/media.js';
-import pushRoutes from './routes/push.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,10 +32,7 @@ app.disable('x-powered-by');
 
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader(
-    'Referrer-Policy',
-    'strict-origin-when-cross-origin'
-  );
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader(
     'Permissions-Policy',
@@ -47,10 +43,7 @@ app.use((_req, res, next) => {
 
 app.use(cors({
   origin(origin, callback) {
-    if (
-      !origin ||
-      allowedOrigins.includes(origin.replace(/\/$/, ''))
-    ) {
+    if (!origin || allowedOrigins.includes(origin.replace(/\/$/, ''))) {
       return callback(null, true);
     }
 
@@ -87,11 +80,9 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/user', communicationRoutes);
 app.use('/api/user', reportRoutes);
-app.use('/api/user/push', pushRoutes);
 app.use('/api/user/uploads', mediaRoutes);
 app.use('/api/public', publicRoutes);
 
-// Los QR físicos abren la ficha pública del frontend.
 app.get('/qr/:codigo', (req, res) => {
   const frontendBase = String(
     process.env.PUBLIC_FRONTEND_URL ||
@@ -127,7 +118,5 @@ app.use((err, _req, res, _next) => {
 });
 
 app.listen(port, () => {
-  console.log(
-    `PRMascotas API escuchando en http://localhost:${port}`
-  );
+  console.log(`PRMascotas API escuchando en http://localhost:${port}`);
 });
