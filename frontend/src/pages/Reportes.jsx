@@ -37,7 +37,12 @@ function BarList({ title, subtitle, items, emptyText = 'Sin datos todavía.' }) 
               <div className="bar-track">
                 <div
                   className="bar-fill"
-                  style={{ width: `${Math.max((item.value / max) * 100, item.value ? 8 : 0)}%` }}
+                  style={{
+                    width: `${Math.max(
+                      (item.value / max) * 100,
+                      item.value ? 8 : 0
+                    )}%`
+                  }}
                 />
               </div>
             </div>
@@ -46,6 +51,14 @@ function BarList({ title, subtitle, items, emptyText = 'Sin datos todavía.' }) 
       </div>
     </div>
   );
+}
+
+function normalizeText(value) {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 }
 
 export default function Reportes() {
@@ -58,6 +71,7 @@ export default function Reportes() {
   const [rows, setRows] = useState([]);
   const [tipo, setTipo] = useState(tipoParam);
   const [estado, setEstado] = useState(estadoParam);
+  const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -66,10 +80,14 @@ export default function Reportes() {
       const { data } = await api.get('/admin/reportes', {
         params: { tipo: nextTipo, estado: nextEstado },
       });
+
       setRows(data);
       setError('');
     } catch (e) {
-      setError(e.response?.data?.message || 'No se pudieron cargar los reportes.');
+      setError(
+        e.response?.data?.message ||
+        'No se pudieron cargar los reportes.'
+      );
     }
   }
 
@@ -91,11 +109,38 @@ export default function Reportes() {
     [rows]
   );
 
+  const filteredRows = useMemo(() => {
+    const term = normalizeText(search);
+
+    if (!term) return rows;
+
+    return rows.filter((r) => {
+      const searchableText = [
+        r.mascota,
+        r.reportante,
+        r.email,
+        r.especie,
+        r.raza,
+        r.ubicacion,
+        r.tipo,
+        r.estado,
+      ]
+        .map(normalizeText)
+        .join(' ');
+
+      return searchableText.includes(term);
+    });
+  }, [rows, search]);
+
   const speciesCounts = useMemo(() => {
     const values = { PERRO: 0, GATO: 0, OTRO: 0 };
+
     rows.forEach((row) => {
-      if (values[row.especie] !== undefined) values[row.especie] += 1;
+      if (values[row.especie] !== undefined) {
+        values[row.especie] += 1;
+      }
     });
+
     return values;
   }, [rows]);
 
@@ -117,25 +162,38 @@ export default function Reportes() {
   ];
 
   async function setStatus(id, next) {
+    setError('');
+    setMessage('');
+
     try {
-      const { data } = await api.patch(`/admin/reportes/${id}/estado`, { estado: next });
+      const { data } = await api.patch(
+        `/admin/reportes/${id}/estado`,
+        { estado: next }
+      );
+
       setMessage(data.message);
       await load();
     } catch (e) {
-      setError(e.response?.data?.message || 'No se pudo actualizar el reporte.');
+      setError(
+        e.response?.data?.message ||
+        'No se pudo actualizar el reporte.'
+      );
     }
   }
 
   function applyFilters() {
     const next = { vista: 'casos' };
+
     if (tipo) next.tipo = tipo;
     if (estado) next.estado = estado;
+
     setParams(next);
   }
 
   function clearFilters() {
     setTipo('');
     setEstado('');
+    setSearch('');
     setParams({ vista: 'casos' });
   }
 
@@ -153,9 +211,15 @@ export default function Reportes() {
       <div className="page-header">
         <div>
           <div className="page-title-row">
-            {vista === 'estadisticas' ? <BarChart3 size={28} /> : <PawPrint size={28} />}
-            <h1>{vista === 'estadisticas' ? 'Estadísticas' : 'Casos'}</h1>
+            {vista === 'estadisticas'
+              ? <BarChart3 size={28} />
+              : <PawPrint size={28} />}
+
+            <h1>
+              {vista === 'estadisticas' ? 'Estadísticas' : 'Casos'}
+            </h1>
           </div>
+
           <p>
             {vista === 'estadisticas'
               ? 'Resumen visual de los casos registrados en Huellitas.'
@@ -184,11 +248,13 @@ export default function Reportes() {
               subtitle="Comparación entre pérdidas y hallazgos."
               items={typeChart}
             />
+
             <BarList
               title="Estado de los casos"
               subtitle="Situación actual de los reportes."
               items={statusChart}
             />
+
             <BarList
               title="Casos por especie"
               subtitle="Distribución según la especie registrada."
@@ -207,8 +273,12 @@ export default function Reportes() {
             <div className="table-wrap">
               <table>
                 <thead>
-                  <tr><th>Indicador</th><th>Cantidad</th></tr>
+                  <tr>
+                    <th>Indicador</th>
+                    <th>Cantidad</th>
+                  </tr>
                 </thead>
+
                 <tbody>
                   <tr><td>Casos totales</td><td><strong>{counts.total}</strong></td></tr>
                   <tr><td>Mascotas perdidas</td><td><strong>{counts.perdidas}</strong></td></tr>
@@ -231,6 +301,7 @@ export default function Reportes() {
             >
               Todos
             </button>
+
             <button
               className={`case-tab ${tipo === 'PERDIDA' ? 'active' : ''}`}
               type="button"
@@ -238,6 +309,7 @@ export default function Reportes() {
             >
               Perdidas
             </button>
+
             <button
               className={`case-tab ${tipo === 'ENCONTRADA' ? 'active' : ''}`}
               type="button"
@@ -257,18 +329,42 @@ export default function Reportes() {
           <div className="toolbar">
             <div className="search-box">
               <Search size={18} />
-              <span className="muted">Filtros de casos</span>
+
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar mascota, reportante, especie o ubicación..."
+                aria-label="Buscar casos"
+              />
             </div>
 
-            <select value={estado} onChange={(e) => setEstado(e.target.value)}>
+            <select
+              value={estado}
+              onChange={(e) => setEstado(e.target.value)}
+              aria-label="Filtrar por estado"
+            >
               <option value="">Todos los estados</option>
               <option value="ACTIVO">Activos</option>
               <option value="RESUELTO">Resueltos</option>
               <option value="CERRADO">Cerrados</option>
             </select>
 
-            <button className="secondary-button" type="button" onClick={applyFilters}>Aplicar</button>
-            <button className="icon-button" type="button" onClick={clearFilters} title="Limpiar filtros">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={applyFilters}
+            >
+              Aplicar
+            </button>
+
+            <button
+              className="icon-button"
+              type="button"
+              onClick={clearFilters}
+              title="Limpiar filtros"
+              aria-label="Limpiar filtros"
+            >
               <X size={16} />
             </button>
           </div>
@@ -286,41 +382,75 @@ export default function Reportes() {
                     <th>Acciones</th>
                   </tr>
                 </thead>
+
                 <tbody>
-                  {rows.map((r) => (
+                  {filteredRows.map((r) => (
                     <tr key={r.id}>
                       <td>
                         <div className="report-cell">
                           <div className={`report-icon ${r.tipo.toLowerCase()}`}>
-                            {r.tipo === 'PERDIDA' ? <FileWarning size={18} /> : <Check size={18} />}
+                            {r.tipo === 'PERDIDA'
+                              ? <FileWarning size={18} />
+                              : <Check size={18} />}
                           </div>
+
                           <div>
-                            <strong>{r.tipo === 'PERDIDA' ? 'Mascota perdida' : 'Mascota encontrada'}</strong>
-                            <span>{new Date(r.fecha_reporte).toLocaleString('es-BO')}</span>
+                            <strong>
+                              {r.tipo === 'PERDIDA'
+                                ? 'Mascota perdida'
+                                : 'Mascota encontrada'}
+                            </strong>
+
+                            <span>
+                              {new Date(r.fecha_reporte).toLocaleString('es-BO')}
+                            </span>
                           </div>
                         </div>
                       </td>
+
                       <td>
                         <strong>{r.mascota}</strong>
-                        <span className="muted">{r.especie} · {r.raza || 'Sin raza'}</span>
+                        <span className="muted">
+                          {r.especie} · {r.raza || 'Sin raza'}
+                        </span>
                       </td>
+
                       <td>
                         <strong>{r.reportante}</strong>
                         <span className="muted">{r.email}</span>
                       </td>
+
                       <td>
-                        <span className="location"><MapPin size={15} />{r.ubicacion || 'Ubicación no indicada'}</span>
+                        <span className="location">
+                          <MapPin size={15} />
+                          {r.ubicacion || 'Ubicación no indicada'}
+                        </span>
                       </td>
-                      <td><StatusBadge value={r.estado} /></td>
+
+                      <td>
+                        <StatusBadge value={r.estado} />
+                      </td>
+
                       <td>
                         <div className="action-row">
                           {r.estado === 'ACTIVO' && (
-                            <button className="secondary-button compact" type="button" onClick={() => setStatus(r.id, 'RESUELTO')}>
-                              <Check size={15} />Resolver
+                            <button
+                              className="secondary-button compact"
+                              type="button"
+                              onClick={() => setStatus(r.id, 'RESUELTO')}
+                            >
+                              <Check size={15} />
+                              Resolver
                             </button>
                           )}
+
                           {r.estado !== 'CERRADO' && (
-                            <button className="icon-button danger" type="button" onClick={() => setStatus(r.id, 'CERRADO')} title="Cerrar">
+                            <button
+                              className="icon-button danger"
+                              type="button"
+                              onClick={() => setStatus(r.id, 'CERRADO')}
+                              title="Cerrar"
+                            >
                               <X size={16} />
                             </button>
                           )}
@@ -331,7 +461,14 @@ export default function Reportes() {
                 </tbody>
               </table>
             </div>
-            {rows.length === 0 && <div className="empty-state">No hay casos para los filtros seleccionados.</div>}
+
+            {filteredRows.length === 0 && (
+              <div className="empty-state">
+                {search.trim()
+                  ? 'No se encontraron casos que coincidan con tu búsqueda.'
+                  : 'No hay casos para los filtros seleccionados.'}
+              </div>
+            )}
           </div>
         </>
       )}
