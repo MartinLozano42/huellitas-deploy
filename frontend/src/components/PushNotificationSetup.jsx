@@ -24,9 +24,10 @@ export default function PushNotificationSetup() {
 
   useEffect(() => {
     const token = localStorage.getItem('prm_token');
-    const path = window.location.pathname;
 
-    if (!token || !path.startsWith('/usuario')) return;
+    if (!token || !window.location.pathname.startsWith('/usuario')) {
+      return;
+    }
 
     let active = true;
 
@@ -45,24 +46,21 @@ export default function PushNotificationSetup() {
 
       try {
         const registration = await navigator.serviceWorker.ready;
-        const subscription = await registration.pushManager.getSubscription();
+        const subscription =
+          await registration.pushManager.getSubscription();
 
         if (!active) return;
 
         if (Notification.permission === 'denied') {
           setStatus('denied');
           setVisible(true);
-          return;
-        }
-
-        if (subscription) {
+        } else if (subscription) {
           setStatus('enabled');
           setVisible(false);
-          return;
+        } else {
+          setStatus('disabled');
+          setVisible(true);
         }
-
-        setStatus('disabled');
-        setVisible(true);
       } catch (error) {
         console.error('[PUSH] Error comprobando dispositivo:', error);
 
@@ -85,28 +83,36 @@ export default function PushNotificationSetup() {
     setMessage('');
 
     try {
-      const publicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
-
-      if (!publicKey) {
-        throw new Error('Falta configurar la clave pública VAPID en Vercel.');
+      if (!window.isSecureContext) {
+        throw new Error('Las notificaciones requieren una conexión HTTPS.');
       }
 
       if (!('serviceWorker' in navigator)) {
-        throw new Error('Este navegador no admite el servicio de notificaciones.');
+        throw new Error('El navegador no admite Service Worker.');
       }
 
       const permission = await Notification.requestPermission();
 
       if (permission !== 'granted') {
         setStatus('denied');
-        throw new Error('No concediste permiso para recibir notificaciones.');
+        throw new Error('No concediste permiso para las notificaciones.');
       }
 
-      const registration = await navigator.serviceWorker.register('/sw.js');
+      const response = await api.get('/user/push/public-key');
+      const publicKey = response.data?.publicKey;
+
+      if (!publicKey || publicKey.length !== 87) {
+        throw new Error('La clave pública VAPID recibida no es válida.');
+      }
+
+      const registration = await navigator.serviceWorker.register('/sw.js', {
+        scope: '/'
+      });
 
       await navigator.serviceWorker.ready;
 
-      let subscription = await registration.pushManager.getSubscription();
+      let subscription =
+        await registration.pushManager.getSubscription();
 
       if (!subscription) {
         subscription = await registration.pushManager.subscribe({
@@ -122,8 +128,15 @@ export default function PushNotificationSetup() {
       setStatus('enabled');
       setVisible(false);
       setMessage('¡Notificaciones activadas correctamente!');
+
+      console.log('[PUSH] Dispositivo registrado correctamente.');
     } catch (error) {
-      console.error('[PUSH] Error activando notificaciones:', error);
+      console.error('[PUSH] Error activando notificaciones:', {
+        name: error.name,
+        message: error.message,
+        status: error.response?.status,
+        response: error.response?.data
+      });
 
       setMessage(
         error.response?.data?.message ||
@@ -141,13 +154,12 @@ export default function PushNotificationSetup() {
 
     try {
       const registration = await navigator.serviceWorker.ready;
-      const subscription = await registration.pushManager.getSubscription();
+      const subscription =
+        await registration.pushManager.getSubscription();
 
       if (subscription) {
         await api.delete('/user/push/subscribe', {
-          data: {
-            endpoint: subscription.endpoint
-          }
+          data: { endpoint: subscription.endpoint }
         });
 
         await subscription.unsubscribe();
@@ -155,7 +167,7 @@ export default function PushNotificationSetup() {
 
       setStatus('disabled');
       setVisible(true);
-      setMessage('Notificaciones desactivadas en este dispositivo.');
+      setMessage('Notificaciones desactivadas.');
     } catch (error) {
       setMessage(
         error.response?.data?.message ||
@@ -209,12 +221,12 @@ export default function PushNotificationSetup() {
 
         {status === 'denied' ? (
           <small>
-            El permiso está bloqueado. Debes habilitarlo desde
-            los ajustes del navegador.
+            El permiso está bloqueado. Habilítalo desde los ajustes
+            del navegador.
           </small>
         ) : status === 'unsupported' ? (
           <small>
-            Tu navegador no admite las notificaciones push.
+            Tu navegador no admite notificaciones push.
           </small>
         ) : (
           <button
@@ -228,9 +240,7 @@ export default function PushNotificationSetup() {
         )}
 
         {message && (
-          <small className="push-setup-message">
-            {message}
-          </small>
+          <small className="push-setup-message">{message}</small>
         )}
       </div>
     </section>
