@@ -59,9 +59,10 @@ function validateReport(form) {
   if (
     ubicacion.length < 3 ||
     ubicacion.length > 255 ||
-    !LOCATION_RE.test(ubicacion)
+    !LOCATION_RE.test(ubicacion) ||
+    !/\p{L}/u.test(ubicacion)
   ) {
-    return 'La ubicación debe contener entre 3 y 255 caracteres válidos.';
+    return 'La ubicación debe contener entre 3 y 255 caracteres válidos y al menos una letra. No puede estar compuesta solamente por números o símbolos.';
   }
 
   const coordinates = validateCoordinates(form.latitud, form.longitud);
