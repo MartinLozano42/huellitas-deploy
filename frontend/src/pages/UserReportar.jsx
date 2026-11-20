@@ -1,3 +1,4 @@
+```jsx
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Camera, MapPin, Send } from 'lucide-react';
