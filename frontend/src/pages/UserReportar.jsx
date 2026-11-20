@@ -1,3 +1,4 @@
+```jsx
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Camera, MapPin, Send } from 'lucide-react';
@@ -6,7 +7,13 @@ import { prepareImageForUpload } from '../imageUpload.js';
 
 const NAME_RE = /^[\p{L}][\p{L}\s'-]{0,99}$/u;
 const BREED_RE = /^[\p{L}][\p{L}\s'().-]{0,99}$/u;
-const LOCATION_RE = /^[\p{L}\p{N}][\p{L}\p{N}\s.,#°ºª'()/\-]{1,253}$/u;
+
+// Ubicación: solamente letras, números y espacios.
+const LOCATION_RE = /^[\p{L}\p{N}\s]+$/u;
+
+// Descripción: solamente letras y espacios.
+const DESCRIPTION_RE = /^[\p{L}\s]+$/u;
+
 const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
 const VALID_TYPES = ['PERDIDA', 'ENCONTRADA'];
@@ -62,7 +69,7 @@ function validateReport(form) {
     !LOCATION_RE.test(ubicacion) ||
     !/\p{L}/u.test(ubicacion)
   ) {
-    return 'La ubicación debe contener entre 3 y 255 caracteres válidos y al menos una letra. No puede estar compuesta solamente por números o símbolos.';
+    return 'La ubicación debe tener entre 3 y 255 caracteres y solamente puede contener letras, números y espacios.';
   }
 
   const coordinates = validateCoordinates(form.latitud, form.longitud);
@@ -79,8 +86,8 @@ function validateReport(form) {
     return 'La descripción contiene caracteres de control no permitidos.';
   }
 
-  if (descripcion && !/[\p{L}]/u.test(descripcion)) {
-    return 'La descripción debe contener palabras y no solamente números o símbolos.';
+  if (descripcion && !DESCRIPTION_RE.test(descripcion)) {
+    return 'La descripción solamente puede contener letras y espacios. No se permiten números ni símbolos.';
   }
 
   if (form.tipo === 'ENCONTRADA' && !form.mascotaId) {
@@ -675,3 +682,4 @@ export default function UserReportar() {
     </div>
   );
 }
+```
