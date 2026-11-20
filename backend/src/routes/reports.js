@@ -31,16 +31,14 @@ const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
 const DESCRIPTION_RE = /[\p{L}\p{N}]/u;
 
-// Normaliza Unicode, espacios y caracteres invisibles.
-// No elimina tildes, ñ, apóstrofes ni guiones válidos.
+// Normaliza Unicode y espacios sin eliminar caracteres válidos.
+// Los caracteres de control se comprueban antes de normalizar espacios.
 function normalizeText(value) {
   if (typeof value !== 'string') return null;
 
   return value
     .normalize('NFC')
-    .replace(/\u00A0/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/\u00A0/g, ' ');
 }
 
 function readText(value, maxLength, options = {}) {
@@ -50,18 +48,26 @@ function readText(value, maxLength, options = {}) {
   } = options;
 
   if (value === null || value === undefined) {
-    return optional ? { value: null } : { error: 'Este campo es obligatorio.' };
+    return optional
+      ? { value: null }
+      : { error: 'Este campo es obligatorio.' };
   }
 
   if (typeof value !== 'string') {
     return { error: 'El formato del campo no es válido.' };
   }
 
-  const normalized = normalizeText(value);
+  let normalized = normalizeText(value);
 
   if (normalized === null) {
     return { error: 'El formato del campo no es válido.' };
   }
+
+  if (CONTROL_CHAR_RE.test(normalized)) {
+    return { error: 'El campo contiene caracteres no permitidos.' };
+  }
+
+  normalized = normalized.replace(/\s+/g, ' ').trim();
 
   if (!normalized) {
     if (optional || allowEmpty) {
@@ -69,10 +75,6 @@ function readText(value, maxLength, options = {}) {
     }
 
     return { error: 'Este campo es obligatorio.' };
-  }
-
-  if (CONTROL_CHAR_RE.test(normalized)) {
-    return { error: 'El campo contiene caracteres no permitidos.' };
   }
 
   if (normalized.length > maxLength) {
