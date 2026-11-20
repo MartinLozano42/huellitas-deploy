@@ -26,7 +26,7 @@ const PET_NAME_RE = /^[\p{L}]+(?:[ '-][\p{L}]+)*$/u;
 const BREED_RE = /^[\p{L}][\p{L}\s'().-]{0,99}$/u;
 const IMAGE_LOCAL_RE = /^\/uploads\/images\/[A-Za-z0-9._-]+$/;
 const CONTROL_CHARS_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
-const CHARACTERISTICS_NUMBER_RE = /\p{N}/u;
+const CHARACTERISTICS_RE = /^[\p{L}\s]+$/u;
 
 function cleanText(value) {
   if (value === null || value === undefined) return '';
@@ -36,15 +36,27 @@ function cleanText(value) {
 }
 
 function validId(value) {
-  if (typeof value !== 'string' && typeof value !== 'number') return null;
-  if (String(value).trim() === '' || !/^\d+$/.test(String(value).trim())) return null;
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return null;
+  }
+
+  if (
+    String(value).trim() === '' ||
+    !/^\d+$/.test(String(value).trim())
+  ) {
+    return null;
+  }
 
   const id = Number(value);
+
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 function validImageReference(value) {
-  if (typeof value !== 'string' || value.length > 500) return false;
+  if (typeof value !== 'string' || value.length > 500) {
+    return false;
+  }
+
   if (IMAGE_LOCAL_RE.test(value)) return true;
 
   try {
@@ -181,8 +193,8 @@ function validatePet(body, pet) {
       return 'Las características contienen caracteres no permitidos.';
     }
 
-    if (CHARACTERISTICS_NUMBER_RE.test(pet.caracteristicas)) {
-      return 'Las características no pueden contener números.';
+    if (!CHARACTERISTICS_RE.test(pet.caracteristicas)) {
+      return 'Las características solo pueden contener letras y espacios. No se permiten números ni caracteres especiales.';
     }
 
     const letters = pet.caracteristicas.match(/\p{L}/gu) || [];
