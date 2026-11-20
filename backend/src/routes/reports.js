@@ -1067,4 +1067,3 @@ router.patch('/reportes/:id/estado', async (req, res) => {
 });
 
 export default router;
-```
