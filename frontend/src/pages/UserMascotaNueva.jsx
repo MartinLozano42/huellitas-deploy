@@ -10,6 +10,7 @@ const VALID_VACCINATION = ['SI', 'NO'];
 
 const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 const LETTER_RE = /\p{L}/u;
+const NUMBER_RE = /\p{N}/u;
 const NAME_RE = /^[\p{L}][\p{L}\s'-]{0,99}$/u;
 const BREED_RE = /^[\p{L}][\p{L}\s'().-]{0,99}$/u;
 const IMAGE_LOCAL_RE = /^\/uploads\/images\/[A-Za-z0-9._-]+$/;
@@ -159,7 +160,7 @@ export default function UserMascotaNueva() {
       return;
     }
 
-    if (file.size > 15 * 1024 * 1024) {
+    if (file.size <= 0 || file.size > 15 * 1024 * 1024) {
       setError('La imagen original no puede superar los 15 MB.');
       return;
     }
@@ -171,7 +172,7 @@ export default function UserMascotaNueva() {
       const optimized = await prepareImageForUpload(file);
       const { data } = await api.post('/user/uploads/imagen', optimized);
 
-      if (!data?.url) {
+      if (!data?.url || typeof data.url !== 'string') {
         throw new Error('El servidor no devolvió la dirección de la imagen.');
       }
 
@@ -247,6 +248,7 @@ export default function UserMascotaNueva() {
       return 'Selecciona una opción válida para la vacunación.';
     }
 
+    // VALIDACIÓN DE CARACTERÍSTICAS
     const caracteristicasResult = validateText(
       form.caracteristicas,
       {
@@ -262,6 +264,13 @@ export default function UserMascotaNueva() {
     }
 
     if (caracteristicasResult.value) {
+
+      // Rechazar cualquier número, incluso mezclado con letras.
+      if (NUMBER_RE.test(caracteristicasResult.value)) {
+        return 'Las características no pueden contener números.';
+      }
+
+      // Comprobar que existan al menos tres letras.
       const letters = caracteristicasResult.value.match(/\p{L}/gu) || [];
 
       if (letters.length < 3) {
@@ -446,7 +455,8 @@ export default function UserMascotaNueva() {
             />
             <small>
               Describe características reales de tu mascota.
-              {' '}{form.caracteristicas.length}/1000 caracteres
+              {' '}{form.caracteristicas.length}/1000 caracteres.
+              No se permiten números.
             </small>
           </label>
 
