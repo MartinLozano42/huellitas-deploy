@@ -10,9 +10,7 @@ const router = Router();
 
 router.use(authenticate, requireActiveAccount, requireUser);
 
-// ==========================================
 // CONSTANTES Y VALIDACIONES
-// ==========================================
 
 const VALID_TYPES = ['PERDIDA', 'ENCONTRADA'];
 const VALID_SPECIES = ['PERRO', 'GATO', 'OTRO'];
@@ -29,10 +27,8 @@ const COORDINATE_RE = /^-?(?:\d{1,3})(?:\.\d{1,8})?$/;
 
 const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
-const DESCRIPTION_RE = /[\p{L}\p{N}]/u;
+const DESCRIPTION_RE = /\p{L}/u;
 
-// Normaliza Unicode y espacios sin eliminar caracteres válidos.
-// Los caracteres de control se comprueban antes de normalizar espacios.
 function normalizeText(value) {
   if (typeof value !== 'string') return null;
 
@@ -212,7 +208,7 @@ function readDescription(value, maxLength, options = {}) {
 
   if (!DESCRIPTION_RE.test(result.value)) {
     return {
-      error: 'La descripción debe contener letras o números, no solamente símbolos.'
+      error: 'La descripción debe contener letras, no solamente números o símbolos.'
     };
   }
 
@@ -260,9 +256,13 @@ function readLocation(value) {
 
   if (result.error) return result;
 
-  if (result.value.length < 3 || !LOCATION_RE.test(result.value)) {
+  if (
+    result.value.length < 3 ||
+    !LOCATION_RE.test(result.value) ||
+    !/\p{L}/u.test(result.value)
+  ) {
     return {
-      error: 'La ubicación debe tener al menos 3 caracteres y contener una dirección válida.'
+      error: 'La ubicación debe tener al menos 3 caracteres y contener letras. No se permiten ubicaciones compuestas solamente por números o símbolos.'
     };
   }
 
@@ -355,9 +355,7 @@ function missingSchema(error) {
   ].includes(error?.code);
 }
 
-// ==========================================
 // NOTIFICACIONES DE REPORTES
-// ==========================================
 
 async function broadcastReportNotification({
   excludeUserId,
@@ -417,9 +415,7 @@ async function broadcastReportNotification({
   );
 }
 
-// ==========================================
 // LISTAR REPORTES DEL USUARIO
-// ==========================================
 
 router.get('/reportes', async (req, res) => {
   try {
@@ -465,9 +461,7 @@ router.get('/reportes', async (req, res) => {
   }
 });
 
-// ==========================================
 // CREAR REPORTE DE MASCOTA
-// ==========================================
 
 router.post('/reportes', async (req, res) => {
   const body = req.body || {};
@@ -680,8 +674,6 @@ router.post('/reportes', async (req, res) => {
       );
     }
 
-    // Las notificaciones son secundarias: un fallo aquí no debe
-    // convertir una publicación exitosa en un error para el usuario.
     try {
       await broadcastReportNotification({
         excludeUserId: req.user.id,
@@ -748,9 +740,7 @@ router.post('/reportes', async (req, res) => {
   }
 });
 
-// ==========================================
 // LISTAR AVISTAMIENTOS
-// ==========================================
 
 router.get('/reportes/:id/avistamientos', async (req, res) => {
   const reportIdResult = readId(req.params.id);
@@ -815,9 +805,7 @@ router.get('/reportes/:id/avistamientos', async (req, res) => {
   }
 });
 
-// ==========================================
 // REGISTRAR AVISTAMIENTO
-// ==========================================
 
 router.post('/reportes/:id/avistamientos', async (req, res) => {
   const reportIdResult = readId(req.params.id);
@@ -920,7 +908,6 @@ router.post('/reportes/:id/avistamientos', async (req, res) => {
       ]
     );
 
-    // El avistamiento queda guardado aunque falle la notificación.
     try {
       await pool.query(
         `INSERT INTO notificaciones
@@ -962,9 +949,7 @@ router.post('/reportes/:id/avistamientos', async (req, res) => {
   }
 });
 
-// ==========================================
 // ACTUALIZAR ESTADO DEL REPORTE
-// ==========================================
 
 router.patch('/reportes/:id/estado', async (req, res) => {
   const reportIdResult = readId(req.params.id);
