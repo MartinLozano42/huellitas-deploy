@@ -10,7 +10,7 @@ const VALID_VACCINATION = ['SI', 'NO'];
 
 const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 const LETTER_RE = /\p{L}/u;
-const NUMBER_RE = /\p{N}/u;
+const CHARACTERISTICS_RE = /^[\p{L} \r\n]+$/u;
 const NAME_RE = /^[\p{L}][\p{L}\s'-]{0,99}$/u;
 const BREED_RE = /^[\p{L}][\p{L}\s'().-]{0,99}$/u;
 const IMAGE_LOCAL_RE = /^\/uploads\/images\/[A-Za-z0-9._-]+$/;
@@ -89,7 +89,7 @@ function validateText(value, options = {}) {
 
   if (requireLetters && !LETTER_RE.test(normalized)) {
     return {
-      error: 'El campo debe contener letras, no solamente números o símbolos.'
+      error: 'El campo debe contener letras.'
     };
   }
 
@@ -102,7 +102,9 @@ function validateImageUrl(value) {
   if (!image) return { value: '' };
 
   if (image.length > 500) {
-    return { error: 'La dirección de la fotografía es demasiado larga.' };
+    return {
+      error: 'La dirección de la fotografía es demasiado larga.'
+    };
   }
 
   if (IMAGE_LOCAL_RE.test(image)) {
@@ -118,7 +120,9 @@ function validateImageUrl(value) {
       url.username ||
       url.password
     ) {
-      return { error: 'La fotografía debe tener una URL HTTP o HTTPS válida.' };
+      return {
+        error: 'La fotografía debe tener una URL HTTP o HTTPS válida.'
+      };
     }
 
     return { value: url.toString() };
@@ -173,7 +177,9 @@ export default function UserMascotaNueva() {
       const { data } = await api.post('/user/uploads/imagen', optimized);
 
       if (!data?.url || typeof data.url !== 'string') {
-        throw new Error('El servidor no devolvió la dirección de la imagen.');
+        throw new Error(
+          'El servidor no devolvió la dirección de la imagen.'
+        );
       }
 
       const validatedImage = validateImageUrl(data.url);
@@ -263,11 +269,12 @@ export default function UserMascotaNueva() {
     }
 
     if (caracteristicasResult.value) {
-      if (NUMBER_RE.test(caracteristicasResult.value)) {
-        return 'Las características no pueden contener números.';
+      if (!CHARACTERISTICS_RE.test(caracteristicasResult.value)) {
+        return 'Las características solo pueden contener letras y espacios. No se permiten números ni caracteres especiales.';
       }
 
-      const letters = caracteristicasResult.value.match(/\p{L}/gu) || [];
+      const letters =
+        caracteristicasResult.value.match(/\p{L}/gu) || [];
 
       if (letters.length < 3) {
         return 'Las características deben contener al menos 3 letras.';
@@ -364,6 +371,7 @@ export default function UserMascotaNueva() {
         <form onSubmit={submit} className="form-grid user-form">
           <label>
             Nombre de la mascota
+
             <input
               name="nombre"
               value={form.nombre}
@@ -373,11 +381,15 @@ export default function UserMascotaNueva() {
               autoComplete="off"
               required
             />
-            <small>Solo letras, espacios, guiones y apóstrofes.</small>
+
+            <small>
+              Solo letras, espacios, guiones y apóstrofes.
+            </small>
           </label>
 
           <label>
             Especie
+
             <select
               name="especie"
               value={form.especie}
@@ -391,6 +403,7 @@ export default function UserMascotaNueva() {
 
           <label>
             Raza
+
             <input
               name="raza"
               value={form.raza}
@@ -402,6 +415,7 @@ export default function UserMascotaNueva() {
 
           <label>
             Sexo
+
             <select
               name="sexo"
               value={form.sexo}
@@ -414,6 +428,7 @@ export default function UserMascotaNueva() {
 
           <label>
             Edad
+
             <input
               name="edad"
               type="number"
@@ -424,11 +439,13 @@ export default function UserMascotaNueva() {
               onChange={change}
               required
             />
+
             <small>Edad expresada en años.</small>
           </label>
 
           <label>
             Vacunado
+
             <select
               name="vacunado"
               value={form.vacunado}
@@ -441,6 +458,7 @@ export default function UserMascotaNueva() {
 
           <label className="full-span">
             Características
+
             <textarea
               name="caracteristicas"
               value={form.caracteristicas}
@@ -449,10 +467,11 @@ export default function UserMascotaNueva() {
               maxLength={1000}
               placeholder="Color, tamaño, señas particulares, etc."
             />
+
             <small>
-              Describe características reales de tu mascota.
+              Solo letras, tildes, espacios y saltos de línea.
               {' '}{form.caracteristicas.length}/1000 caracteres.
-              No se permiten números.
+              No se permiten números ni caracteres especiales.
             </small>
           </label>
 
