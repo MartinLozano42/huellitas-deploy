@@ -22,9 +22,10 @@ const palettes = {
   }
 };
 
-const LOCATION_RE = /^[\p{L}\p{N}][\p{L}\p{N}\s.,#°ºª'()/\-]{1,138}$/u;
+const LOCATION_RE = /^[\p{L}\p{N}\s]+$/u;
+const DESCRIPTION_RE = /^[\p{L}\s]+$/u;
 const PHONE_RE = /^\+?[0-9]{7,15}$/;
-const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+const CONTROL_RE = /[\u0000-\u001F\u007F]/;
 
 function normalizePhone(value) {
   return value.replace(/[\s()-]/g, '');
@@ -34,6 +35,7 @@ function validDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
 
   const date = new Date(`${value}T00:00:00`);
+
   if (Number.isNaN(date.getTime())) return false;
 
   const [year, month, day] = value.split('-').map(Number);
@@ -42,7 +44,9 @@ function validDate(value) {
     date.getFullYear() !== year ||
     date.getMonth() + 1 !== month ||
     date.getDate() !== day
-  ) return false;
+  ) {
+    return false;
+  }
 
   const today = new Date();
   today.setHours(23, 59, 59, 999);
@@ -62,10 +66,9 @@ function validatePoster(form) {
   if (
     ubicacion.length < 3 ||
     ubicacion.length > 140 ||
-    !LOCATION_RE.test(ubicacion) ||
-    !/\p{L}/u.test(ubicacion)
+    !LOCATION_RE.test(ubicacion)
   ) {
-    return 'La ubicación debe contener letras y una dirección o referencia válida.';
+    return 'La ubicación solo puede contener letras, números y espacios. No se permiten caracteres especiales.';
   }
 
   if (!validDate(form.fecha)) {
@@ -90,15 +93,15 @@ function validatePoster(form) {
     return 'La descripción contiene caracteres no permitidos.';
   }
 
-  if (descripcion && !/\p{L}/u.test(descripcion)) {
-    return 'La descripción debe contener letras, no solamente números o símbolos.';
+  if (descripcion && !DESCRIPTION_RE.test(descripcion)) {
+    return 'La descripción solo puede contener letras y espacios. No se permiten números ni caracteres especiales.';
   }
 
-  if (descripcion && !/[\p{L}\p{N}]/u.test(descripcion)) {
-    return 'La descripción no contiene información válida.';
-  }
-
-  return { ubicacion, contacto: phone, descripcion };
+  return {
+    ubicacion,
+    contacto: phone,
+    descripcion
+  };
 }
 
 export default function UserAfichePerdida() {
@@ -138,7 +141,10 @@ export default function UserAfichePerdida() {
         }
       })
       .catch((e) => {
-        setError(e.response?.data?.message || 'No se pudieron cargar tus mascotas.');
+        setError(
+          e.response?.data?.message ||
+          'No se pudieron cargar tus mascotas.'
+        );
       });
   }, [searchParams]);
 
@@ -146,6 +152,7 @@ export default function UserAfichePerdida() {
 
   useEffect(() => {
     let cancelled = false;
+
     setPhotoLoaded(null);
 
     if (!photo) return;
@@ -169,7 +176,9 @@ export default function UserAfichePerdida() {
     img.onerror = () => {
       if (!cancelled) {
         setPhotoLoaded(null);
-        setError('No se encontró la foto guardada. Vuelve a subirla desde Editar mascota.');
+        setError(
+          'No se encontró la foto guardada. Vuelve a subirla desde Editar mascota.'
+        );
       }
     };
 
@@ -182,6 +191,7 @@ export default function UserAfichePerdida() {
 
   useEffect(() => {
     const canvas = canvasRef.current;
+
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
@@ -227,7 +237,11 @@ export default function UserAfichePerdida() {
         ctx.fillStyle = '#64748b';
         ctx.font = 'bold 26px Arial';
         ctx.textAlign = 'center';
-        ctx.fillText('FOTO DE LA MASCOTA', x + width / 2, y + height / 2);
+        ctx.fillText(
+          'FOTO DE LA MASCOTA',
+          x + width / 2,
+          y + height / 2
+        );
       }
 
       ctx.restore();
@@ -240,9 +254,14 @@ export default function UserAfichePerdida() {
 
       const value = String(text || '');
 
-      while (ctx.measureText(value).width > maxWidth && font.match(/\d+/)) {
+      while (
+        ctx.measureText(value).width > maxWidth &&
+        font.match(/\d+/)
+      ) {
         const size = Number(font.match(/\d+/)[0]);
+
         if (size <= 18) break;
+
         ctx.font = font.replace(/\d+px/, `${size - 2}px`);
       }
 
@@ -265,14 +284,29 @@ export default function UserAfichePerdida() {
       ctx.fillStyle = orange;
       ctx.fillRect(0, 0, w, 14);
 
-      drawCentered('¿LA HAS VISTO?', 76, '900 46px Arial', '#ffffff', 740);
-      drawCentered('AYÚDANOS A ENCONTRARLA', 133, 'bold 31px Arial', orange, 740);
+      drawCentered(
+        '¿LA HAS VISTO?',
+        76,
+        '900 46px Arial',
+        '#ffffff',
+        740
+      );
+
+      drawCentered(
+        'AYÚDANOS A ENCONTRARLA',
+        133,
+        'bold 31px Arial',
+        orange,
+        740
+      );
 
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(42, 168, 716, 56);
 
       drawCentered(
-        (pet?.nombre || 'NOMBRE DE LA MASCOTA').toLocaleUpperCase().slice(0, 32),
+        (pet?.nombre || 'NOMBRE DE LA MASCOTA')
+          .toLocaleUpperCase()
+          .slice(0, 32),
         207,
         'bold 31px Arial',
         navy,
@@ -284,29 +318,71 @@ export default function UserAfichePerdida() {
       ctx.fillStyle = blue;
       ctx.fillRect(42, 600, 716, 10);
 
-      drawCentered('ÚLTIMA UBICACIÓN', 654, 'bold 25px Arial', navy, 700);
+      drawCentered(
+        'ÚLTIMA UBICACIÓN',
+        654,
+        'bold 25px Arial',
+        navy,
+        700
+      );
 
       ctx.fillStyle = navy;
       ctx.font = 'bold 31px Arial';
 
-      wrapText(ctx, form.ubicacion.trim() || 'Añade la ubicación', w / 2, 700, 680, 38, 2);
+      wrapText(
+        ctx,
+        form.ubicacion.trim() || 'Añade la ubicación',
+        w / 2,
+        700,
+        680,
+        38,
+        2
+      );
 
       if (form.descripcion.trim()) {
         ctx.fillStyle = c.ink;
         ctx.font = 'italic 21px Arial';
-        wrapText(ctx, form.descripcion.trim(), w / 2, 776, 680, 27, 2);
+
+        wrapText(
+          ctx,
+          form.descripcion.trim(),
+          w / 2,
+          776,
+          680,
+          27,
+          2
+        );
       }
 
       ctx.fillStyle = c.bottom;
       ctx.fillRect(42, 838, 716, 116);
 
-      drawCentered('SI TIENES INFORMACIÓN, CONTÁCTANOS', 880, 'bold 21px Arial', navy, 680);
-      drawCentered(form.contacto.trim() || 'Añade teléfono de contacto', 924, 'bold 30px Arial', blue, 680);
+      drawCentered(
+        'SI TIENES INFORMACIÓN, CONTÁCTANOS',
+        880,
+        'bold 21px Arial',
+        navy,
+        680
+      );
+
+      drawCentered(
+        form.contacto.trim() || 'Añade teléfono de contacto',
+        924,
+        'bold 30px Arial',
+        blue,
+        680
+      );
 
       ctx.fillStyle = orange;
       ctx.fillRect(42, 980, 716, 70);
 
-      drawCentered('¡AYÚDANOS A QUE VUELVA A CASA!', 1024, 'bold 24px Arial', navy, 680);
+      drawCentered(
+        '¡AYÚDANOS A QUE VUELVA A CASA!',
+        1024,
+        'bold 24px Arial',
+        navy,
+        680
+      );
 
       drawCentered(
         `${pet?.especie || 'MASCOTA'}${pet?.raza ? ` · ${pet.raza}` : ''}${form.fecha ? ` · ${form.fecha}` : ''}`,
@@ -322,14 +398,29 @@ export default function UserAfichePerdida() {
       ctx.fillStyle = c.top;
       ctx.fillRect(0, 0, w, 132);
 
-      drawCentered('MASCOTA PERDIDA', 57, '900 43px Arial', c.ink, 740);
-      drawCentered('AYÚDANOS A ENCONTRARLA', 103, 'bold 29px Arial', c.ink, 740);
+      drawCentered(
+        'MASCOTA PERDIDA',
+        57,
+        '900 43px Arial',
+        c.ink,
+        740
+      );
+
+      drawCentered(
+        'AYÚDANOS A ENCONTRARLA',
+        103,
+        'bold 29px Arial',
+        c.ink,
+        740
+      );
 
       ctx.fillStyle = c.accent;
       ctx.fillRect(44, 126, w - 88, 58);
 
       drawCentered(
-        (pet?.nombre || 'NOMBRE DE LA MASCOTA').toLocaleUpperCase().slice(0, 32),
+        (pet?.nombre || 'NOMBRE DE LA MASCOTA')
+          .toLocaleUpperCase()
+          .slice(0, 32),
         165,
         'bold 31px Arial',
         c.top === '#b91c1c' ? '#111827' : c.bottom,
@@ -341,29 +432,71 @@ export default function UserAfichePerdida() {
       ctx.fillStyle = c.bottom;
       ctx.fillRect(0, 575, w, 545);
 
-      drawCentered('VISTO POR ÚLTIMA VEZ EN:', 625, 'bold 26px Arial', c.ink, 740);
+      drawCentered(
+        'VISTO POR ÚLTIMA VEZ EN:',
+        625,
+        'bold 26px Arial',
+        c.ink,
+        740
+      );
 
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 31px Arial';
 
-      wrapText(ctx, form.ubicacion.trim() || 'Añade la ubicación', w / 2, 674, 690, 38, 2);
+      wrapText(
+        ctx,
+        form.ubicacion.trim() || 'Añade la ubicación',
+        w / 2,
+        674,
+        690,
+        38,
+        2
+      );
 
       if (form.descripcion.trim()) {
         ctx.fillStyle = '#ffffff';
         ctx.font = 'italic 20px Arial';
-        wrapText(ctx, form.descripcion.trim(), w / 2, 745, 690, 26, 2);
+
+        wrapText(
+          ctx,
+          form.descripcion.trim(),
+          w / 2,
+          745,
+          690,
+          26,
+          2
+        );
       }
 
       ctx.fillStyle = c.accent;
       ctx.fillRect(52, 802, w - 104, 5);
 
-      drawCentered('SI LA VES, ¡CONTÁCTANOS!', 850, 'bold 25px Arial', c.ink, 720);
-      drawCentered(form.contacto.trim() || 'Añade teléfono de contacto', 901, 'bold 31px Arial', '#ffffff', 720);
+      drawCentered(
+        'SI LA VES, ¡CONTÁCTANOS!',
+        850,
+        'bold 25px Arial',
+        c.ink,
+        720
+      );
+
+      drawCentered(
+        form.contacto.trim() || 'Añade teléfono de contacto',
+        901,
+        'bold 31px Arial',
+        '#ffffff',
+        720
+      );
 
       ctx.fillStyle = c.accent;
       ctx.fillRect(44, 945, w - 88, 70);
 
-      drawCentered('¡AYÚDANOS A QUE VUELVA A CASA!', 989, 'bold 24px Arial', c.bottom, 680);
+      drawCentered(
+        '¡AYÚDANOS A QUE VUELVA A CASA!',
+        989,
+        'bold 24px Arial',
+        c.bottom,
+        680
+      );
 
       drawCentered(
         `${pet?.especie || 'MASCOTA'}${pet?.raza ? ` · ${pet.raza}` : ''}${form.fecha ? ` · ${form.fecha}` : ''}`,
@@ -402,9 +535,11 @@ export default function UserAfichePerdida() {
 
   function selectPet(e) {
     const id = e.target.value;
+
     setPetId(id);
 
     const chosen = pets.find((p) => String(p.id) === id);
+
     setPhoto(chosen?.foto || '');
   }
 
@@ -429,6 +564,7 @@ export default function UserAfichePerdida() {
 
   function uploadPhoto(e) {
     const file = e.target.files?.[0];
+
     e.target.value = '';
 
     if (!file) return;
@@ -499,7 +635,9 @@ export default function UserAfichePerdida() {
 
       setError('');
     } catch {
-      setError('No se pudo exportar la fotografía. Comprueba que el servicio externo permita exportación.');
+      setError(
+        'No se pudo exportar la fotografía. Comprueba que el servicio externo permita exportación.'
+      );
     }
   }
 
@@ -529,11 +667,19 @@ export default function UserAfichePerdida() {
             <ImageIcon size={24} />
             <h1>Generador de afiches</h1>
           </div>
-          <p>Diseña y descarga un afiche para compartir manualmente. No necesita conectar redes sociales.</p>
+
+          <p>
+            Diseña y descarga un afiche para compartir manualmente.
+            No necesita conectar redes sociales.
+          </p>
         </div>
       </div>
 
-      {error && <div className="alert error" role="alert">{error}</div>}
+      {error && (
+        <div className="alert error" role="alert">
+          {error}
+        </div>
+      )}
 
       {!pets.length ? (
         <div className="empty-state">
@@ -547,16 +693,23 @@ export default function UserAfichePerdida() {
 
             <label>
               Mascota registrada
+
               <select value={petId} onChange={selectPet}>
                 {pets.map((p) => (
-                  <option key={p.id} value={p.id}>{p.nombre} · {p.especie}</option>
+                  <option key={p.id} value={p.id}>
+                    {p.nombre} · {p.especie}
+                  </option>
                 ))}
               </select>
             </label>
 
             <label>
               Plantilla
-              <select value={form.plantilla} onChange={(e) => selectTemplate(e.target.value)}>
+
+              <select
+                value={form.plantilla}
+                onChange={(e) => selectTemplate(e.target.value)}
+              >
                 <option value="impacto">Impacto clásico</option>
                 <option value="comunidad">Ayuda de la comunidad</option>
               </select>
@@ -564,19 +717,23 @@ export default function UserAfichePerdida() {
 
             <label>
               Colores
+
               <select
                 value={form.color}
-                onChange={(e) => updateForm(e)}
+                onChange={updateForm}
                 name="color"
               >
                 {colorOptions.map(([value, label]) => (
-                  <option key={value} value={value}>{label}</option>
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
                 ))}
               </select>
             </label>
 
             <label>
               Ubicación donde se perdió
+
               <input
                 name="ubicacion"
                 value={form.ubicacion}
@@ -585,10 +742,16 @@ export default function UserAfichePerdida() {
                 placeholder="Barrio, calle o referencia"
                 autoComplete="off"
               />
+
+              <small>
+                Se permiten letras, números, espacios y tildes.
+                No se permiten símbolos.
+              </small>
             </label>
 
             <label>
               Fecha
+
               <input
                 name="fecha"
                 type="date"
@@ -600,6 +763,7 @@ export default function UserAfichePerdida() {
 
             <label>
               Contacto telefónico que quieres publicar
+
               <input
                 name="contacto"
                 type="tel"
@@ -610,10 +774,15 @@ export default function UserAfichePerdida() {
                 inputMode="tel"
                 autoComplete="tel"
               />
+
+              <small>
+                Se aceptan números y prefijo internacional.
+              </small>
             </label>
 
             <label>
               Descripción breve (opcional)
+
               <textarea
                 name="descripcion"
                 rows="3"
@@ -622,20 +791,31 @@ export default function UserAfichePerdida() {
                 onChange={updateForm}
                 placeholder="Señas particulares, color, tamaño..."
               />
-              <small>{form.descripcion.length}/250 caracteres.</small>
+
+              <small>
+                {form.descripcion.length}/250 caracteres.
+                Solo letras y espacios.
+              </small>
             </label>
 
             <label>
               Foto para el afiche
+
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
                 onChange={uploadPhoto}
               />
+
               <small>JPG, PNG o WEBP · máximo 10 MB.</small>
             </label>
 
-            <button className="primary-button" type="button" onClick={download} disabled={!pet}>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={download}
+              disabled={!pet}
+            >
               <Download size={17} />
               Descargar afiche PNG
             </button>
@@ -648,8 +828,18 @@ export default function UserAfichePerdida() {
 
           <section className="panel poster-preview">
             <h2>Vista previa</h2>
-            <canvas ref={canvasRef} aria-label="Vista previa del afiche de mascota perdida" />
-            <button className="primary-button" type="button" onClick={download} disabled={!pet}>
+
+            <canvas
+              ref={canvasRef}
+              aria-label="Vista previa del afiche de mascota perdida"
+            />
+
+            <button
+              className="primary-button"
+              type="button"
+              onClick={download}
+              disabled={!pet}
+            >
               <Download size={17} />
               Descargar PNG
             </button>
