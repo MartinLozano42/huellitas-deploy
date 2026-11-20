@@ -4,11 +4,15 @@ import { useNavigate } from 'react-router-dom';
 import api, { mediaUrl } from '../api.js';
 import { prepareImageForUpload } from '../imageUpload.js';
 
+const VALID_SPECIES = ['PERRO', 'GATO', 'OTRO'];
+const VALID_SEXES = ['MACHO', 'HEMBRA'];
+const VALID_VACCINATION = ['SI', 'NO'];
+
+const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+const LETTER_RE = /\p{L}/u;
 const NAME_RE = /^[\p{L}][\p{L}\s'-]{0,99}$/u;
 const BREED_RE = /^[\p{L}][\p{L}\s'().-]{0,99}$/u;
-const IMAGE_URL_RE = /^https?:\/\/\S+$/i;
-const LOCAL_IMAGE_RE = /^\/uploads\/images\/[A-Za-z0-9._-]+$/;
-const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+const IMAGE_LOCAL_RE = /^\/uploads\/images\/[A-Za-z0-9._-]+$/;
 
 const INITIAL_FORM = {
   nombre: '',
@@ -20,6 +24,109 @@ const INITIAL_FORM = {
   caracteristicas: '',
   foto: ''
 };
+
+function normalizeText(value) {
+  if (typeof value !== 'string') return null;
+
+  return value
+    .normalize('NFC')
+    .replace(/\u00A0/g, ' ')
+    .replace(/\r\n?/g, '\n');
+}
+
+function validateText(value, options = {}) {
+  const {
+    required = false,
+    maxLength = 1000,
+    minLength = 1,
+    requireLetters = false,
+    allowNewLines = false
+  } = options;
+
+  if (typeof value !== 'string') {
+    return { error: 'El formato del campo no es válido.' };
+  }
+
+  let normalized = normalizeText(value);
+
+  if (normalized === null) {
+    return { error: 'El formato del campo no es válido.' };
+  }
+
+  if (CONTROL_CHAR_RE.test(normalized)) {
+    return { error: 'El campo contiene caracteres no permitidos.' };
+  }
+
+  if (!allowNewLines) {
+    normalized = normalized.replace(/\s+/g, ' ');
+  } else {
+    normalized = normalized
+      .split('\n')
+      .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+      .join('\n');
+  }
+
+  normalized = normalized.trim();
+
+  if (!normalized) {
+    return required
+      ? { error: 'Este campo es obligatorio.' }
+      : { value: '' };
+  }
+
+  if (normalized.length < minLength) {
+    return {
+      error: `El campo debe tener al menos ${minLength} caracteres.`
+    };
+  }
+
+  if (normalized.length > maxLength) {
+    return {
+      error: `El campo no puede superar los ${maxLength} caracteres.`
+    };
+  }
+
+  if (requireLetters && !LETTER_RE.test(normalized)) {
+    return {
+      error: 'El campo debe contener letras, no solamente números o símbolos.'
+    };
+  }
+
+  return { value: normalized };
+}
+
+function validateImageUrl(value) {
+  const image = value.trim();
+
+  if (!image) return { value: '' };
+
+  if (image.length > 500) {
+    return { error: 'La dirección de la fotografía es demasiado larga.' };
+  }
+
+  if (IMAGE_LOCAL_RE.test(image)) {
+    return { value: image };
+  }
+
+  try {
+    const url = new URL(image);
+
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      !url.hostname ||
+      url.username ||
+      url.password
+    ) {
+      return { error: 'La fotografía debe tener una URL HTTP o HTTPS válida.' };
+    }
+
+    return { value: url.toString() };
+  } catch {
+    return {
+      error: 'Introduce una URL válida o selecciona una fotografía cargada en Huellitas.'
+    };
+  }
+}
 
 export default function UserMascotaNueva() {
   const navigate = useNavigate();
@@ -52,8 +159,8 @@ export default function UserMascotaNueva() {
       return;
     }
 
-    if (file.size <= 0 || file.size > 15 * 1024 * 1024) {
-      setError('La imagen debe tener un tamaño mayor a 0 y no superar los 15 MB.');
+    if (file.size > 15 * 1024 * 1024) {
+      setError('La imagen original no puede superar los 15 MB.');
       return;
     }
 
@@ -64,19 +171,22 @@ export default function UserMascotaNueva() {
       const optimized = await prepareImageForUpload(file);
       const { data } = await api.post('/user/uploads/imagen', optimized);
 
-      if (
-        typeof data?.url !== 'string' ||
-        (!IMAGE_URL_RE.test(data.url) && !LOCAL_IMAGE_RE.test(data.url))
-      ) {
-        throw new Error('El servidor devolvió una dirección de imagen no válida.');
+      if (!data?.url) {
+        throw new Error('El servidor no devolvió la dirección de la imagen.');
+      }
+
+      const validatedImage = validateImageUrl(data.url);
+
+      if (validatedImage.error) {
+        throw new Error(validatedImage.error);
       }
 
       setForm((current) => ({
         ...current,
-        foto: data.url
+        foto: validatedImage.value
       }));
 
-      setPhotoPreview(data.url);
+      setPhotoPreview(validatedImage.value);
     } catch (e) {
       setError(
         e.response?.data?.message ||
@@ -89,100 +199,85 @@ export default function UserMascotaNueva() {
   }
 
   function validateForm() {
-    const nombre = form.nombre.trim().replace(/\s+/g, ' ');
-    const raza = form.raza.trim().replace(/\s+/g, ' ');
-    const caracteristicas = form.caracteristicas.trim().replace(/\s+/g, ' ');
-    const foto = form.foto.trim();
-    const edadText = String(form.edad).trim();
+    const nombreResult = validateText(form.nombre, {
+      required: true,
+      minLength: 2,
+      maxLength: 100,
+      requireLetters: true
+    });
 
-    if (!nombre) {
-      return 'El nombre de la mascota es obligatorio.';
+    if (nombreResult.error) return nombreResult.error;
+
+    if (!NAME_RE.test(nombreResult.value)) {
+      return 'El nombre solo puede contener letras, espacios, guiones y apóstrofes.';
     }
 
-    if (!NAME_RE.test(nombre)) {
-      return 'El nombre debe contener entre 1 y 100 letras. Se permiten espacios, guiones y apóstrofes.';
-    }
-
-    if (!['PERRO', 'GATO', 'OTRO'].includes(form.especie)) {
+    if (!VALID_SPECIES.includes(form.especie)) {
       return 'Selecciona una especie válida.';
     }
 
-    if (raza.length > 100) {
-      return 'La raza no puede superar los 100 caracteres.';
+    const razaResult = validateText(form.raza, {
+      maxLength: 100,
+      requireLetters: true
+    });
+
+    if (razaResult.error) return razaResult.error;
+
+    if (razaResult.value && !BREED_RE.test(razaResult.value)) {
+      return 'La raza contiene caracteres no permitidos.';
     }
 
-    if (raza && !BREED_RE.test(raza)) {
-      return 'La raza debe contener letras y puede incluir espacios, puntos, paréntesis, apóstrofes o guiones. No puede ser solamente números.';
-    }
-
-    if (!['MACHO', 'HEMBRA'].includes(form.sexo)) {
+    if (!VALID_SEXES.includes(form.sexo)) {
       return 'Selecciona un sexo válido.';
     }
 
-    if (!/^\d{1,2}$/.test(edadText)) {
+    const edadText = String(form.edad).trim();
+
+    if (!/^(0|[1-9]\d*)$/.test(edadText)) {
       return 'La edad debe ser un número entero válido.';
     }
 
     const edad = Number(edadText);
 
-    if (!Number.isInteger(edad) || edad < 0 || edad > 40) {
+    if (!Number.isSafeInteger(edad) || edad < 0 || edad > 40) {
       return 'La edad debe estar entre 0 y 40 años.';
     }
 
-    if (!['SI', 'NO'].includes(form.vacunado)) {
+    if (!VALID_VACCINATION.includes(form.vacunado)) {
       return 'Selecciona una opción válida para la vacunación.';
     }
 
-    if (caracteristicas.length > 1000) {
-      return 'Las características no pueden superar los 1000 caracteres.';
+    const caracteristicasResult = validateText(
+      form.caracteristicas,
+      {
+        maxLength: 1000,
+        minLength: 3,
+        requireLetters: true,
+        allowNewLines: true
+      }
+    );
+
+    if (caracteristicasResult.error) {
+      return caracteristicasResult.error;
     }
 
-    if (caracteristicas && CONTROL_RE.test(caracteristicas)) {
-      return 'Las características contienen caracteres no permitidos.';
-    }
+    if (caracteristicasResult.value) {
+      const letters = caracteristicasResult.value.match(/\p{L}/gu) || [];
 
-    if (
-      caracteristicas &&
-      !/[\p{L}]/u.test(caracteristicas)
-    ) {
-      return 'Las características deben incluir una descripción con letras, no solamente números o símbolos.';
-    }
-
-    if (
-      caracteristicas &&
-      !/[\p{L}\p{N}]/u.test(caracteristicas)
-    ) {
-      return 'Las características deben contener información descriptiva válida.';
-    }
-
-    if (
-      foto &&
-      !IMAGE_URL_RE.test(foto) &&
-      !LOCAL_IMAGE_RE.test(foto)
-    ) {
-      return 'Introduce una URL HTTP/HTTPS válida o selecciona una fotografía cargada en Huellitas.';
-    }
-
-    if (foto && IMAGE_URL_RE.test(foto)) {
-      try {
-        const parsedUrl = new URL(foto);
-
-        if (
-          !['http:', 'https:'].includes(parsedUrl.protocol) ||
-          !parsedUrl.hostname.includes('.')
-        ) {
-          return 'La dirección de la fotografía no es válida.';
-        }
-      } catch {
-        return 'La dirección de la fotografía no es válida.';
+      if (letters.length < 3) {
+        return 'Las características deben contener al menos 3 letras.';
       }
     }
 
+    const fotoResult = validateImageUrl(form.foto);
+
+    if (fotoResult.error) return fotoResult.error;
+
     return {
-      nombre,
-      raza,
-      caracteristicas,
-      foto,
+      nombre: nombreResult.value,
+      raza: razaResult.value,
+      caracteristicas: caracteristicasResult.value,
+      foto: fotoResult.value,
       edad
     };
   }
@@ -209,7 +304,9 @@ export default function UserMascotaNueva() {
       });
 
       if (!data?.mascota?.id) {
-        throw new Error('La mascota se registró, pero el servidor no devolvió su identificador.');
+        throw new Error(
+          'La mascota se registró, pero el servidor no devolvió su identificador.'
+        );
       }
 
       navigate(`/usuario/mascotas/${data.mascota.id}`, {
@@ -259,7 +356,7 @@ export default function UserMascotaNueva() {
       )}
 
       <div className="panel form-panel">
-        <form onSubmit={submit} className="form-grid user-form" noValidate>
+        <form onSubmit={submit} className="form-grid user-form">
           <label>
             Nombre de la mascota
             <input
@@ -294,9 +391,8 @@ export default function UserMascotaNueva() {
               value={form.raza}
               onChange={change}
               maxLength={100}
-              placeholder="Ej. Pastor Alemán"
+              placeholder="Opcional"
             />
-            <small>Opcional. Escribe el nombre de la raza.</small>
           </label>
 
           <label>
@@ -348,7 +444,10 @@ export default function UserMascotaNueva() {
               maxLength={1000}
               placeholder="Color, tamaño, señas particulares, etc."
             />
-            <small>{form.caracteristicas.length}/1000 caracteres. Describe las características con palabras.</small>
+            <small>
+              Describe características reales de tu mascota.
+              {' '}{form.caracteristicas.length}/1000 caracteres
+            </small>
           </label>
 
           <div className="full-span">
