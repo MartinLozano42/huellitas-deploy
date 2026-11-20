@@ -12,10 +12,6 @@ const router = Router();
 
 router.use(authenticate, requireActiveAccount, requireUser);
 
-// ======================================================
-// CONFIGURACIÓN Y VALIDACIONES
-// ======================================================
-
 const ESPECIES = ['PERRO', 'GATO', 'OTRO'];
 const SEXOS = ['MACHO', 'HEMBRA'];
 const VACUNACION = ['SI', 'NO'];
@@ -30,6 +26,7 @@ const PET_NAME_RE = /^[\p{L}]+(?:[ '-][\p{L}]+)*$/u;
 const BREED_RE = /^[\p{L}][\p{L}\s'().-]{0,99}$/u;
 const IMAGE_LOCAL_RE = /^\/uploads\/images\/[A-Za-z0-9._-]+$/;
 const CONTROL_CHARS_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+const CHARACTERISTICS_NUMBER_RE = /\p{N}/u;
 
 function cleanText(value) {
   if (value === null || value === undefined) return '';
@@ -184,8 +181,14 @@ function validatePet(body, pet) {
       return 'Las características contienen caracteres no permitidos.';
     }
 
-    if (!/[\p{L}]/u.test(pet.caracteristicas)) {
-      return 'Las características deben incluir una descripción con letras, no solamente números o símbolos.';
+    if (CHARACTERISTICS_NUMBER_RE.test(pet.caracteristicas)) {
+      return 'Las características no pueden contener números.';
+    }
+
+    const letters = pet.caracteristicas.match(/\p{L}/gu) || [];
+
+    if (letters.length < 3) {
+      return 'Las características deben contener al menos 3 letras.';
     }
   }
 
@@ -203,9 +206,7 @@ function validatePet(body, pet) {
   return null;
 }
 
-// ======================================================
 // PERFIL
-// ======================================================
 
 router.get('/perfil', async (req, res) => {
   try {
@@ -235,9 +236,7 @@ router.get('/perfil', async (req, res) => {
   }
 });
 
-// ======================================================
 // LISTAR MASCOTAS
-// ======================================================
 
 router.get('/mascotas', async (req, res) => {
   try {
@@ -262,9 +261,7 @@ router.get('/mascotas', async (req, res) => {
   }
 });
 
-// ======================================================
 // REGISTRAR MASCOTA
-// ======================================================
 
 router.post('/mascotas', async (req, res) => {
   try {
@@ -319,9 +316,7 @@ router.post('/mascotas', async (req, res) => {
   }
 });
 
-// ======================================================
 // EDITAR MASCOTA
-// ======================================================
 
 router.put('/mascotas/:id', async (req, res) => {
   try {
@@ -400,9 +395,7 @@ router.put('/mascotas/:id', async (req, res) => {
   }
 });
 
-// ======================================================
-// ELIMINAR MASCOTA DESDE LA CUENTA DEL PROPIETARIO
-// ======================================================
+// ELIMINAR MASCOTA
 
 router.delete('/mascotas/:id', async (req, res) => {
   const id = validId(req.params.id);
@@ -518,9 +511,7 @@ router.delete('/mascotas/:id', async (req, res) => {
   }
 });
 
-// ======================================================
 // DETALLE DE MASCOTA
-// ======================================================
 
 router.get('/mascotas/:id', async (req, res) => {
   try {
@@ -572,9 +563,7 @@ router.get('/mascotas/:id', async (req, res) => {
   }
 });
 
-// ======================================================
 // LISTAR IDENTIFICACIONES QR
-// ======================================================
 
 router.get('/qr', async (req, res) => {
   try {
@@ -602,9 +591,7 @@ router.get('/qr', async (req, res) => {
   }
 });
 
-// ======================================================
 // SOLICITAR RETIRO EN SUCURSAL
-// ======================================================
 
 router.patch('/qr/:id/recogida', async (req, res) => {
   try {
@@ -703,9 +690,7 @@ router.patch('/qr/:id/recogida', async (req, res) => {
   }
 });
 
-// ======================================================
 // GENERAR IMAGEN QR
-// ======================================================
 
 router.get('/qr/:id/imagen', async (req, res) => {
   try {
@@ -773,9 +758,7 @@ router.get('/qr/:id/imagen', async (req, res) => {
   }
 });
 
-// ======================================================
 // SOLICITAR IDENTIFICACIÓN QR
-// ======================================================
 
 router.post('/mascotas/:id/qr', async (req, res) => {
   try {
