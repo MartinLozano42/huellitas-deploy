@@ -4,6 +4,39 @@ import { useNavigate, useParams } from 'react-router-dom';
 import api, { mediaUrl } from '../api.js';
 import { prepareImageForUpload } from '../imageUpload.js';
 
+const NAME_RE = /^[\p{L}]+(?:[ '-][\p{L}]+)*$/u;
+const BREED_RE = /^[\p{L}][\p{L}\s'().-]{0,99}$/u;
+const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+const LOCAL_IMAGE_RE = /^\/uploads\/images\/[A-Za-z0-9._-]+$/;
+
+const ESPECIES = ['PERRO', 'GATO', 'OTRO'];
+const SEXOS = ['MACHO', 'HEMBRA'];
+const VACUNACION = ['SI', 'NO'];
+
+function validateImage(value) {
+  if (!value) return true;
+
+  if (typeof value !== 'string' || value.length > 500) {
+    return false;
+  }
+
+  if (LOCAL_IMAGE_RE.test(value)) return true;
+
+  try {
+    const url = new URL(value);
+
+    return (
+      ['http:', 'https:'].includes(url.protocol) &&
+      Boolean(url.hostname) &&
+      url.hostname.includes('.') &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
 export default function UserMascotaEditar() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -26,7 +59,8 @@ export default function UserMascotaEditar() {
           vacunado: data.vacunado || 'SI',
           caracteristicas: data.caracteristicas || '',
           foto: data.foto || '',
-          mostrar_contacto_qr: Number(data.mostrar_contacto_qr) === 1
+          mostrar_contacto_qr:
+            Number(data.mostrar_contacto_qr) === 1
         });
 
         setPreview(data.foto || '');
@@ -46,6 +80,8 @@ export default function UserMascotaEditar() {
       ...f,
       [name]: type === 'checkbox' ? checked : value
     }));
+
+    setError('');
   }
 
   async function uploadPhoto(e) {
@@ -54,12 +90,26 @@ export default function UserMascotaEditar() {
 
     if (!file) return;
 
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setError('Solo se permiten imágenes JPG, PNG o WEBP.');
+      return;
+    }
+
+    if (file.size <= 0 || file.size > 15 * 1024 * 1024) {
+      setError('La imagen no puede superar los 15 MB.');
+      return;
+    }
+
     setError('');
     setUploading(true);
 
     try {
       const optimized = await prepareImageForUpload(file);
       const { data } = await api.post('/user/uploads/imagen', optimized);
+
+      if (!validateImage(data?.url) || !data?.url) {
+        throw new Error('El servidor devolvió una dirección de imagen inválida.');
+      }
 
       setForm((f) => ({
         ...f,
@@ -78,18 +128,99 @@ export default function UserMascotaEditar() {
     }
   }
 
+  function validateForm() {
+    const nombre = form.nombre.trim().replace(/\s+/g, ' ');
+    const raza = form.raza.trim().replace(/\s+/g, ' ');
+    const caracteristicas = form.caracteristicas.trim().replace(/\s+/g, ' ');
+    const edadText = String(form.edad).trim();
+    const foto = form.foto.trim();
+
+    if (!nombre) {
+      return 'El nombre de la mascota es obligatorio.';
+    }
+
+    if (nombre.length > 100 || !NAME_RE.test(nombre)) {
+      return 'El nombre debe contener letras, espacios, guiones o apóstrofes. No se permiten números ni símbolos.';
+    }
+
+    if (!ESPECIES.includes(form.especie)) {
+      return 'Selecciona una especie válida.';
+    }
+
+    if (raza.length > 100) {
+      return 'La raza no puede superar los 100 caracteres.';
+    }
+
+    if (raza && !BREED_RE.test(raza)) {
+      return 'La raza debe contener letras y no puede ser solamente números o símbolos.';
+    }
+
+    if (!SEXOS.includes(form.sexo)) {
+      return 'Selecciona un sexo válido.';
+    }
+
+    if (!/^\d{1,2}$/.test(edadText)) {
+      return 'La edad debe ser un número entero.';
+    }
+
+    const edad = Number(edadText);
+
+    if (!Number.isInteger(edad) || edad < 0 || edad > 40) {
+      return 'La edad debe estar entre 0 y 40 años.';
+    }
+
+    if (!VACUNACION.includes(form.vacunado)) {
+      return 'Selecciona una opción válida de vacunación.';
+    }
+
+    if (caracteristicas.length > 1000) {
+      return 'Las características no pueden superar los 1000 caracteres.';
+    }
+
+    if (CONTROL_RE.test(caracteristicas)) {
+      return 'Las características contienen caracteres no permitidos.';
+    }
+
+    if (
+      caracteristicas &&
+      !/[\p{L}]/u.test(caracteristicas)
+    ) {
+      return 'Las características deben contener una descripción con letras.';
+    }
+
+    if (!validateImage(foto)) {
+      return 'La dirección de la fotografía no es válida.';
+    }
+
+    return {
+      nombre,
+      raza,
+      caracteristicas,
+      edad,
+      foto
+    };
+  }
+
   async function submit(e) {
     e.preventDefault();
 
     setError('');
+
+    if (loading || uploading) return;
+
+    const validated = validateForm();
+
+    if (typeof validated === 'string') {
+      setError(validated);
+      return;
+    }
+
     setLoading(true);
 
     try {
       const payload = {
         ...form,
-        nombre: form.nombre.trim(),
-        edad: Number(form.edad),
-        foto: form.foto.trim(),
+        ...validated,
         mostrar_contacto_qr: form.mostrar_contacto_qr ? 1 : 0
       };
 
@@ -145,10 +276,18 @@ export default function UserMascotaEditar() {
         </div>
       </div>
 
-      {error && <div className="alert error">{error}</div>}
+      {error && (
+        <div className="alert error" role="alert">
+          {error}
+        </div>
+      )}
 
       <div className="panel form-panel">
-        <form className="form-grid user-form" onSubmit={submit}>
+        <form
+          className="form-grid user-form"
+          onSubmit={submit}
+          noValidate
+        >
 
           <label>
             Nombre
@@ -159,6 +298,7 @@ export default function UserMascotaEditar() {
               maxLength={100}
               required
             />
+            <small>Solo letras, espacios, guiones y apóstrofes.</small>
           </label>
 
           <label>
@@ -182,6 +322,7 @@ export default function UserMascotaEditar() {
               onChange={change}
               maxLength={100}
             />
+            <small>Opcional. Introduce el nombre de la raza.</small>
           </label>
 
           <label>
@@ -203,10 +344,12 @@ export default function UserMascotaEditar() {
               type="number"
               min="0"
               max="40"
+              step="1"
               value={form.edad}
               onChange={change}
               required
             />
+            <small>Edad en años, de 0 a 40.</small>
           </label>
 
           <label>
@@ -230,9 +373,11 @@ export default function UserMascotaEditar() {
               value={form.caracteristicas}
               onChange={change}
             />
+            <small>
+              {form.caracteristicas.length}/1000 caracteres.
+              Describe las características con palabras.
+            </small>
           </label>
-
-          {/* PRIVACIDAD DEL QR */}
 
           <div className="full-span panel" style={{ padding: '18px' }}>
             <div className="page-title-row">
@@ -285,8 +430,6 @@ export default function UserMascotaEditar() {
             </div>
           </div>
 
-          {/* FOTOGRAFÍA */}
-
           <div className="full-span">
             <span className="field-label">Fotografía</span>
 
@@ -301,14 +444,14 @@ export default function UserMascotaEditar() {
               </strong>
 
               <span>
-                JPG, PNG o WEBP · se optimiza antes de subir
+                JPG, PNG o WEBP · máximo 15 MB
               </span>
 
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
                 onChange={uploadPhoto}
-                disabled={uploading}
+                disabled={uploading || loading}
               />
             </label>
 
@@ -316,7 +459,7 @@ export default function UserMascotaEditar() {
               <div className="report-photo-preview">
                 <img
                   src={mediaUrl(preview)}
-                  alt="Vista previa"
+                  alt="Vista previa de la mascota"
                 />
 
                 <span>Foto actual</span>
@@ -335,13 +478,12 @@ export default function UserMascotaEditar() {
             )}
           </div>
 
-          {/* BOTONES */}
-
           <div className="form-actions full-span">
             <button
               type="button"
               className="secondary-button"
               onClick={() => navigate(`/usuario/mascotas/${id}`)}
+              disabled={loading || uploading}
             >
               Cancelar
             </button>
