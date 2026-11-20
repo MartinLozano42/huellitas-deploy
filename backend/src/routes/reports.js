@@ -10,41 +10,334 @@ const router = Router();
 
 router.use(authenticate, requireActiveAccount, requireUser);
 
-const NAME_RE = /^[\p{L}][\p{L}\s'-]{0,99}$/u;
+// ==========================================
+// CONSTANTES Y VALIDACIONES
+// ==========================================
+
 const VALID_TYPES = ['PERDIDA', 'ENCONTRADA'];
 const VALID_SPECIES = ['PERRO', 'GATO', 'OTRO'];
 const VALID_SEXES = ['MACHO', 'HEMBRA'];
 const VALID_REPORT_STATES = ['RESUELTO', 'CERRADO'];
 
-function cleanText(value, maxLength) {
-  if (value === null || value === undefined) return '';
-  if (typeof value !== 'string' && typeof value !== 'number') return '';
-  return String(value).trim().slice(0, maxLength);
+const NAME_RE = /^[\p{L}][\p{L}\s'-]{0,99}$/u;
+const BREED_RE = /^[\p{L}][\p{L}\s'().-]{0,99}$/u;
+
+const LOCATION_RE =
+  /^[\p{L}\p{N}][\p{L}\p{N}\s.,#°ºª'()/\-]{1,254}$/u;
+
+const COORDINATE_RE = /^-?(?:\d{1,3})(?:\.\d{1,8})?$/;
+
+const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+
+const DESCRIPTION_RE = /[\p{L}\p{N}]/u;
+
+// Normaliza Unicode, espacios y caracteres invisibles.
+// No elimina tildes, ñ, apóstrofes ni guiones válidos.
+function normalizeText(value) {
+  if (typeof value !== 'string') return null;
+
+  return value
+    .normalize('NFC')
+    .replace(/\u00A0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function numberOrNull(value) {
-  if (value === '' || value === null || value === undefined) return null;
-  if (typeof value !== 'number' && typeof value !== 'string') return NaN;
-  if (typeof value === 'string' && !value.trim()) return null;
+function readText(value, maxLength, options = {}) {
+  const {
+    optional = false,
+    allowEmpty = false
+  } = options;
 
-  const number = Number(value);
-  return Number.isFinite(number) ? number : NaN;
+  if (value === null || value === undefined) {
+    return optional ? { value: null } : { error: 'Este campo es obligatorio.' };
+  }
+
+  if (typeof value !== 'string') {
+    return { error: 'El formato del campo no es válido.' };
+  }
+
+  const normalized = normalizeText(value);
+
+  if (normalized === null) {
+    return { error: 'El formato del campo no es válido.' };
+  }
+
+  if (!normalized) {
+    if (optional || allowEmpty) {
+      return { value: null };
+    }
+
+    return { error: 'Este campo es obligatorio.' };
+  }
+
+  if (CONTROL_CHAR_RE.test(normalized)) {
+    return { error: 'El campo contiene caracteres no permitidos.' };
+  }
+
+  if (normalized.length > maxLength) {
+    return {
+      error: `El campo no puede superar los ${maxLength} caracteres.`
+    };
+  }
+
+  return { value: normalized };
 }
 
-function validId(value) {
-  if (value === null || value === undefined || value === '') return null;
+function readEnum(value, allowedValues, options = {}) {
+  const { optional = false } = options;
 
-  const id = Number(value);
-  return Number.isSafeInteger(id) && id > 0 ? id : NaN;
+  if (value === null || value === undefined || value === '') {
+    return optional
+      ? { value: null }
+      : { error: 'Selecciona una opción válida.' };
+  }
+
+  if (typeof value !== 'string') {
+    return { error: 'La opción seleccionada no es válida.' };
+  }
+
+  const normalized = value.trim().toUpperCase();
+
+  if (!allowedValues.includes(normalized)) {
+    return { error: 'La opción seleccionada no es válida.' };
+  }
+
+  return { value: normalized };
 }
 
-function validImage(value) {
-  if (!value) return true;
+function readId(value, options = {}) {
+  const { optional = false } = options;
 
-  return (
-    /^https?:\/\/\S+$/i.test(value) ||
-    /^\/uploads\/images\/[A-Za-z0-9._-]+$/.test(value)
-  );
+  if (value === null || value === undefined || value === '') {
+    return optional
+      ? { value: null }
+      : { error: 'El identificador es obligatorio.' };
+  }
+
+  if (
+    typeof value !== 'number' &&
+    typeof value !== 'string'
+  ) {
+    return { error: 'El identificador no es válido.' };
+  }
+
+  const text = String(value).trim();
+
+  if (!/^[1-9]\d*$/.test(text)) {
+    return { error: 'El identificador debe ser un entero positivo.' };
+  }
+
+  const id = Number(text);
+
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return { error: 'El identificador no es válido.' };
+  }
+
+  return { value: id };
+}
+
+function readAge(value, options = {}) {
+  const { optional = true } = options;
+
+  if (value === null || value === undefined || value === '') {
+    return optional
+      ? { value: null }
+      : { error: 'Indica la edad de la mascota.' };
+  }
+
+  if (
+    typeof value !== 'number' &&
+    typeof value !== 'string'
+  ) {
+    return { error: 'La edad debe ser un número entero.' };
+  }
+
+  const text = String(value).trim();
+
+  if (!/^(0|[1-9]\d*)$/.test(text)) {
+    return { error: 'La edad debe ser un número entero.' };
+  }
+
+  const age = Number(text);
+
+  if (!Number.isSafeInteger(age) || age < 0 || age > 40) {
+    return { error: 'La edad debe estar entre 0 y 40 años.' };
+  }
+
+  return { value: age };
+}
+
+function readCoordinate(value, fieldName) {
+  if (value === null || value === undefined || value === '') {
+    return { value: null };
+  }
+
+  if (
+    typeof value !== 'number' &&
+    typeof value !== 'string'
+  ) {
+    return { error: `${fieldName} no es válida.` };
+  }
+
+  const text = String(value).trim();
+
+  if (!COORDINATE_RE.test(text)) {
+    return {
+      error: `${fieldName} debe ser un número decimal válido.`
+    };
+  }
+
+  const number = Number(text);
+
+  if (!Number.isFinite(number)) {
+    return { error: `${fieldName} no es válida.` };
+  }
+
+  return { value: number };
+}
+
+function readDescription(value, maxLength, options = {}) {
+  const { optional = true } = options;
+
+  const result = readText(value, maxLength, { optional });
+
+  if (result.error) return result;
+
+  if (result.value === null) {
+    return { value: null };
+  }
+
+  if (!DESCRIPTION_RE.test(result.value)) {
+    return {
+      error: 'La descripción debe contener letras o números, no solamente símbolos.'
+    };
+  }
+
+  return result;
+}
+
+function readName(value, options = {}) {
+  const { optional = false } = options;
+
+  const result = readText(value, 100, { optional });
+
+  if (result.error || result.value === null) {
+    return result;
+  }
+
+  if (!NAME_RE.test(result.value)) {
+    return {
+      error: 'El nombre solo puede contener letras, espacios, guiones y apóstrofes.'
+    };
+  }
+
+  return result;
+}
+
+function readBreed(value, options = {}) {
+  const { optional = true } = options;
+
+  const result = readText(value, 100, { optional });
+
+  if (result.error || result.value === null) {
+    return result;
+  }
+
+  if (!BREED_RE.test(result.value)) {
+    return {
+      error: 'La raza debe contener letras y puede incluir espacios, guiones, apóstrofes o paréntesis.'
+    };
+  }
+
+  return result;
+}
+
+function readLocation(value) {
+  const result = readText(value, 255);
+
+  if (result.error) return result;
+
+  if (result.value.length < 3 || !LOCATION_RE.test(result.value)) {
+    return {
+      error: 'La ubicación debe tener al menos 3 caracteres y contener una dirección válida.'
+    };
+  }
+
+  return result;
+}
+
+function readImage(value) {
+  if (value === null || value === undefined || value === '') {
+    return { value: null };
+  }
+
+  if (typeof value !== 'string') {
+    return { error: 'La fotografía no tiene un formato válido.' };
+  }
+
+  const image = value.trim();
+
+  if (!image || image.length > 500) {
+    return { error: 'La dirección de la fotografía no es válida.' };
+  }
+
+  if (/^\/uploads\/images\/[A-Za-z0-9._-]+$/.test(image)) {
+    return { value: image };
+  }
+
+  try {
+    const url = new URL(image);
+
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      !url.hostname ||
+      url.username ||
+      url.password
+    ) {
+      return { error: 'La fotografía debe ser una URL HTTP o HTTPS válida.' };
+    }
+
+    return { value: url.toString() };
+  } catch {
+    return {
+      error: 'La fotografía debe ser una URL válida o una imagen cargada en Huellitas.'
+    };
+  }
+}
+
+function validateCoordinates(latitud, longitud, res) {
+  if (latitud.error || longitud.error) {
+    return res.status(400).json({
+      message: latitud.error || longitud.error
+    });
+  }
+
+  if ((latitud.value === null) !== (longitud.value === null)) {
+    return res.status(400).json({
+      message: 'Completa latitud y longitud, o deja ambos campos vacíos.'
+    });
+  }
+
+  if (
+    latitud.value !== null &&
+    (latitud.value < -90 || latitud.value > 90)
+  ) {
+    return res.status(400).json({
+      message: 'La latitud debe estar entre -90 y 90.'
+    });
+  }
+
+  if (
+    longitud.value !== null &&
+    (longitud.value < -180 || longitud.value > 180)
+  ) {
+    return res.status(400).json({
+      message: 'La longitud debe estar entre -180 y 180.'
+    });
+  }
+
+  return true;
 }
 
 function schemaError(res) {
@@ -54,39 +347,10 @@ function schemaError(res) {
 }
 
 function missingSchema(error) {
-  return ['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(error?.code);
-}
-
-function validateCoordinates(latitud, longitud, res) {
-  if (Number.isNaN(latitud) || Number.isNaN(longitud)) {
-    res.status(400).json({
-      message: 'Las coordenadas deben ser números válidos.'
-    });
-    return false;
-  }
-
-  if ((latitud === null) !== (longitud === null)) {
-    res.status(400).json({
-      message: 'Completa latitud y longitud, o deja ambos campos vacíos.'
-    });
-    return false;
-  }
-
-  if (latitud !== null && (latitud < -90 || latitud > 90)) {
-    res.status(400).json({
-      message: 'La latitud debe estar entre -90 y 90.'
-    });
-    return false;
-  }
-
-  if (longitud !== null && (longitud < -180 || longitud > 180)) {
-    res.status(400).json({
-      message: 'La longitud debe estar entre -180 y 180.'
-    });
-    return false;
-  }
-
-  return true;
+  return [
+    'ER_NO_SUCH_TABLE',
+    'ER_BAD_FIELD_ERROR'
+  ].includes(error?.code);
 }
 
 // ==========================================
@@ -187,13 +451,13 @@ router.get('/reportes', async (req, res) => {
       [req.user.id]
     );
 
-    res.json(rows);
+    return res.json(rows);
   } catch (error) {
     if (missingSchema(error)) return schemaError(res);
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudieron cargar tus reportes.'
     });
   }
@@ -204,51 +468,66 @@ router.get('/reportes', async (req, res) => {
 // ==========================================
 
 router.post('/reportes', async (req, res) => {
-  const tipo = cleanText(req.body?.tipo, 20).toUpperCase();
-  const mascotaId = validId(req.body?.mascota_id);
+  const body = req.body || {};
 
-  const nombre = cleanText(req.body?.nombre_mascota, 100)
-    .replace(/\s+/g, ' ');
+  const tipoResult = readEnum(body.tipo, VALID_TYPES);
+  const mascotaIdResult = readId(body.mascota_id, { optional: true });
 
-  const especie = cleanText(req.body?.especie_mascota, 20).toUpperCase();
-  const raza = cleanText(req.body?.raza_mascota, 100) || null;
-  const sexo = cleanText(req.body?.sexo_mascota, 20).toUpperCase() || null;
-  const edad = numberOrNull(req.body?.edad_mascota);
+  const nombreResult = readName(body.nombre_mascota, { optional: true });
+  const especieResult = readEnum(body.especie_mascota, VALID_SPECIES, {
+    optional: true
+  });
+  const razaResult = readBreed(body.raza_mascota);
+  const sexoResult = readEnum(body.sexo_mascota, VALID_SEXES, {
+    optional: true
+  });
+  const edadResult = readAge(body.edad_mascota);
 
-  const descripcion = cleanText(req.body?.descripcion, 4000) || null;
+  const descripcionResult = readDescription(body.descripcion, 4000);
+  const ubicacionResult = readLocation(body.ubicacion);
 
-  const ubicacion = cleanText(req.body?.ubicacion, 255)
-    .replace(/\s+/g, ' ');
+  const latitudResult = readCoordinate(body.latitud, 'La latitud');
+  const longitudResult = readCoordinate(body.longitud, 'La longitud');
 
-  const latitud = numberOrNull(req.body?.latitud);
-  const longitud = numberOrNull(req.body?.longitud);
-  const foto = cleanText(req.body?.foto, 500) || null;
+  const fotoResult = readImage(body.foto);
 
-  if (!VALID_TYPES.includes(tipo)) {
+  const validations = [
+    tipoResult,
+    mascotaIdResult,
+    nombreResult,
+    especieResult,
+    razaResult,
+    sexoResult,
+    edadResult,
+    descripcionResult,
+    ubicacionResult,
+    fotoResult
+  ];
+
+  const invalid = validations.find((item) => item.error);
+
+  if (invalid) {
     return res.status(400).json({
-      message: 'Selecciona pérdida o hallazgo.'
+      message: invalid.error
     });
   }
 
-  if (Number.isNaN(mascotaId)) {
-    return res.status(400).json({
-      message: 'La mascota seleccionada no es válida.'
-    });
+  if (!validateCoordinates(latitudResult, longitudResult, res)) {
+    return;
   }
 
-  if (!ubicacion) {
-    return res.status(400).json({
-      message: 'Indica la última ubicación conocida o el lugar del hallazgo.'
-    });
-  }
-
-  if (!validateCoordinates(latitud, longitud, res)) return;
-
-  if (!validImage(foto)) {
-    return res.status(400).json({
-      message: 'La fotografía debe ser una URL válida o una imagen cargada en Huellitas.'
-    });
-  }
+  const tipo = tipoResult.value;
+  const mascotaId = mascotaIdResult.value;
+  const nombre = nombreResult.value;
+  const especie = especieResult.value;
+  const raza = razaResult.value;
+  const sexo = sexoResult.value;
+  const edad = edadResult.value;
+  const descripcion = descripcionResult.value;
+  const ubicacion = ubicacionResult.value;
+  const latitud = latitudResult.value;
+  const longitud = longitudResult.value;
+  const foto = fotoResult.value;
 
   let pet = null;
 
@@ -323,7 +602,7 @@ router.post('/reportes', async (req, res) => {
         });
       }
 
-      if (!VALID_SPECIES.includes(especie)) {
+      if (!especie || !VALID_SPECIES.includes(especie)) {
         return res.status(400).json({
           message: 'Selecciona una especie válida.'
         });
@@ -332,15 +611,6 @@ router.post('/reportes', async (req, res) => {
       if (sexo && !VALID_SEXES.includes(sexo)) {
         return res.status(400).json({
           message: 'Selecciona un sexo válido.'
-        });
-      }
-
-      if (
-        Number.isNaN(edad) ||
-        (edad !== null && (!Number.isInteger(edad) || edad < 0 || edad > 40))
-      ) {
-        return res.status(400).json({
-          message: 'La edad debe ser un entero entre 0 y 40.'
         });
       }
     }
@@ -481,13 +751,15 @@ router.post('/reportes', async (req, res) => {
 // ==========================================
 
 router.get('/reportes/:id/avistamientos', async (req, res) => {
-  const reportId = validId(req.params.id);
+  const reportIdResult = readId(req.params.id);
 
-  if (!reportId) {
+  if (reportIdResult.error) {
     return res.status(400).json({
       message: 'El identificador del reporte no es válido.'
     });
   }
+
+  const reportId = reportIdResult.value;
 
   try {
     const [reports] = await pool.query(
@@ -546,35 +818,44 @@ router.get('/reportes/:id/avistamientos', async (req, res) => {
 // ==========================================
 
 router.post('/reportes/:id/avistamientos', async (req, res) => {
-  const reportId = validId(req.params.id);
+  const reportIdResult = readId(req.params.id);
 
-  if (!reportId) {
+  if (reportIdResult.error) {
     return res.status(400).json({
       message: 'El identificador del reporte no es válido.'
     });
   }
 
-  const ubicacion = cleanText(req.body?.ubicacion, 255)
-    .replace(/\s+/g, ' ');
+  const reportId = reportIdResult.value;
+  const body = req.body || {};
 
-  const descripcion = cleanText(req.body?.descripcion, 2000) || null;
-  const latitud = numberOrNull(req.body?.latitud);
-  const longitud = numberOrNull(req.body?.longitud);
-  const foto = cleanText(req.body?.foto, 500) || null;
+  const ubicacionResult = readLocation(body.ubicacion);
+  const descripcionResult = readDescription(body.descripcion, 2000);
+  const latitudResult = readCoordinate(body.latitud, 'La latitud');
+  const longitudResult = readCoordinate(body.longitud, 'La longitud');
+  const fotoResult = readImage(body.foto);
 
-  if (!ubicacion) {
+  const invalid = [
+    ubicacionResult,
+    descripcionResult,
+    fotoResult
+  ].find((item) => item.error);
+
+  if (invalid) {
     return res.status(400).json({
-      message: 'Indica dónde viste a la mascota.'
+      message: invalid.error
     });
   }
 
-  if (!validateCoordinates(latitud, longitud, res)) return;
-
-  if (!validImage(foto)) {
-    return res.status(400).json({
-      message: 'La fotografía debe ser una URL válida o una imagen cargada en Huellitas.'
-    });
+  if (!validateCoordinates(latitudResult, longitudResult, res)) {
+    return;
   }
+
+  const ubicacion = ubicacionResult.value;
+  const descripcion = descripcionResult.value;
+  const latitud = latitudResult.value;
+  const longitud = longitudResult.value;
+  const foto = fotoResult.value;
 
   try {
     const [rows] = await pool.query(
@@ -684,21 +965,26 @@ router.post('/reportes/:id/avistamientos', async (req, res) => {
 // ==========================================
 
 router.patch('/reportes/:id/estado', async (req, res) => {
-  const reportId = validId(req.params.id);
+  const reportIdResult = readId(req.params.id);
+  const estadoResult = readEnum(
+    req.body?.estado,
+    VALID_REPORT_STATES
+  );
 
-  const estado = cleanText(req.body?.estado, 20).toUpperCase();
-
-  if (!reportId) {
+  if (reportIdResult.error) {
     return res.status(400).json({
       message: 'El identificador del reporte no es válido.'
     });
   }
 
-  if (!VALID_REPORT_STATES.includes(estado)) {
+  if (estadoResult.error) {
     return res.status(400).json({
       message: 'El estado debe ser RESUELTO o CERRADO.'
     });
   }
+
+  const reportId = reportIdResult.value;
+  const estado = estadoResult.value;
 
   let connection;
 
