@@ -248,7 +248,6 @@ export default function UserMascotaNueva() {
       return 'Selecciona una opción válida para la vacunación.';
     }
 
-    // VALIDACIÓN DE CARACTERÍSTICAS
     const caracteristicasResult = validateText(
       form.caracteristicas,
       {
@@ -264,13 +263,10 @@ export default function UserMascotaNueva() {
     }
 
     if (caracteristicasResult.value) {
-
-      // Rechazar cualquier número, incluso mezclado con letras.
       if (NUMBER_RE.test(caracteristicasResult.value)) {
         return 'Las características no pueden contener números.';
       }
 
-      // Comprobar que existan al menos tres letras.
       const letters = caracteristicasResult.value.match(/\p{L}/gu) || [];
 
       if (letters.length < 3) {
