@@ -1,3 +1,4 @@
+```javascript
 import { Router } from 'express';
 import pool from '../db.js';
 import {
@@ -20,14 +21,14 @@ const VALID_REPORT_STATES = ['RESUELTO', 'CERRADO'];
 const NAME_RE = /^[\p{L}][\p{L}\s'-]{0,99}$/u;
 const BREED_RE = /^[\p{L}][\p{L}\s'().-]{0,99}$/u;
 
-const LOCATION_RE =
-  /^[\p{L}\p{N}][\p{L}\p{N}\s.,#°ºª'()/\-]{1,254}$/u;
+// Ubicación: solamente letras, números y espacios.
+const LOCATION_RE = /^[\p{L}\p{N}\s]+$/u;
+
+// Descripción: solamente letras y espacios.
+const DESCRIPTION_RE = /^[\p{L}\s]+$/u;
 
 const COORDINATE_RE = /^-?(?:\d{1,3})(?:\.\d{1,8})?$/;
-
 const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
-
-const DESCRIPTION_RE = /\p{L}/u;
 
 function normalizeText(value) {
   if (typeof value !== 'string') return null;
@@ -208,7 +209,7 @@ function readDescription(value, maxLength, options = {}) {
 
   if (!DESCRIPTION_RE.test(result.value)) {
     return {
-      error: 'La descripción debe contener letras, no solamente números o símbolos.'
+      error: 'La descripción solamente puede contener letras y espacios. No se permiten números ni símbolos.'
     };
   }
 
@@ -262,7 +263,7 @@ function readLocation(value) {
     !/\p{L}/u.test(result.value)
   ) {
     return {
-      error: 'La ubicación debe tener al menos 3 caracteres y contener letras. No se permiten ubicaciones compuestas solamente por números o símbolos.'
+      error: 'La ubicación debe tener al menos 3 caracteres y solamente puede contener letras, números y espacios.'
     };
   }
 
@@ -1067,3 +1068,4 @@ router.patch('/reportes/:id/estado', async (req, res) => {
 });
 
 export default router;
+```
