@@ -5,8 +5,10 @@ import api, { mediaUrl } from '../api.js';
 import { prepareImageForUpload } from '../imageUpload.js';
 
 const NAME_RE = /^[\p{L}][\p{L}\s'-]{0,99}$/u;
+const BREED_RE = /^[\p{L}][\p{L}\s'().-]{0,99}$/u;
 const IMAGE_URL_RE = /^https?:\/\/\S+$/i;
 const LOCAL_IMAGE_RE = /^\/uploads\/images\/[A-Za-z0-9._-]+$/;
+const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
 const INITIAL_FORM = {
   nombre: '',
@@ -50,8 +52,8 @@ export default function UserMascotaNueva() {
       return;
     }
 
-    if (file.size > 15 * 1024 * 1024) {
-      setError('La imagen original no puede superar los 15 MB.');
+    if (file.size <= 0 || file.size > 15 * 1024 * 1024) {
+      setError('La imagen debe tener un tamaño mayor a 0 y no superar los 15 MB.');
       return;
     }
 
@@ -62,8 +64,11 @@ export default function UserMascotaNueva() {
       const optimized = await prepareImageForUpload(file);
       const { data } = await api.post('/user/uploads/imagen', optimized);
 
-      if (!data?.url) {
-        throw new Error('El servidor no devolvió la dirección de la imagen.');
+      if (
+        typeof data?.url !== 'string' ||
+        (!IMAGE_URL_RE.test(data.url) && !LOCAL_IMAGE_RE.test(data.url))
+      ) {
+        throw new Error('El servidor devolvió una dirección de imagen no válida.');
       }
 
       setForm((current) => ({
@@ -85,17 +90,17 @@ export default function UserMascotaNueva() {
 
   function validateForm() {
     const nombre = form.nombre.trim().replace(/\s+/g, ' ');
-    const raza = form.raza.trim();
-    const caracteristicas = form.caracteristicas.trim();
+    const raza = form.raza.trim().replace(/\s+/g, ' ');
+    const caracteristicas = form.caracteristicas.trim().replace(/\s+/g, ' ');
     const foto = form.foto.trim();
-    const edad = Number(form.edad);
+    const edadText = String(form.edad).trim();
 
     if (!nombre) {
       return 'El nombre de la mascota es obligatorio.';
     }
 
     if (!NAME_RE.test(nombre)) {
-      return 'El nombre solo puede contener letras, espacios, guiones y apóstrofes.';
+      return 'El nombre debe contener entre 1 y 100 letras. Se permiten espacios, guiones y apóstrofes.';
     }
 
     if (!['PERRO', 'GATO', 'OTRO'].includes(form.especie)) {
@@ -106,12 +111,22 @@ export default function UserMascotaNueva() {
       return 'La raza no puede superar los 100 caracteres.';
     }
 
+    if (raza && !BREED_RE.test(raza)) {
+      return 'La raza debe contener letras y puede incluir espacios, puntos, paréntesis, apóstrofes o guiones. No puede ser solamente números.';
+    }
+
     if (!['MACHO', 'HEMBRA'].includes(form.sexo)) {
       return 'Selecciona un sexo válido.';
     }
 
+    if (!/^\d{1,2}$/.test(edadText)) {
+      return 'La edad debe ser un número entero válido.';
+    }
+
+    const edad = Number(edadText);
+
     if (!Number.isInteger(edad) || edad < 0 || edad > 40) {
-      return 'La edad debe ser un número entero entre 0 y 40.';
+      return 'La edad debe estar entre 0 y 40 años.';
     }
 
     if (!['SI', 'NO'].includes(form.vacunado)) {
@@ -122,12 +137,45 @@ export default function UserMascotaNueva() {
       return 'Las características no pueden superar los 1000 caracteres.';
     }
 
+    if (caracteristicas && CONTROL_RE.test(caracteristicas)) {
+      return 'Las características contienen caracteres no permitidos.';
+    }
+
+    if (
+      caracteristicas &&
+      !/[\p{L}]/u.test(caracteristicas)
+    ) {
+      return 'Las características deben incluir una descripción con letras, no solamente números o símbolos.';
+    }
+
+    if (
+      caracteristicas &&
+      !/[\p{L}\p{N}]/u.test(caracteristicas)
+    ) {
+      return 'Las características deben contener información descriptiva válida.';
+    }
+
     if (
       foto &&
       !IMAGE_URL_RE.test(foto) &&
       !LOCAL_IMAGE_RE.test(foto)
     ) {
-      return 'Introduce una URL válida o selecciona una fotografía cargada en Huellitas.';
+      return 'Introduce una URL HTTP/HTTPS válida o selecciona una fotografía cargada en Huellitas.';
+    }
+
+    if (foto && IMAGE_URL_RE.test(foto)) {
+      try {
+        const parsedUrl = new URL(foto);
+
+        if (
+          !['http:', 'https:'].includes(parsedUrl.protocol) ||
+          !parsedUrl.hostname.includes('.')
+        ) {
+          return 'La dirección de la fotografía no es válida.';
+        }
+      } catch {
+        return 'La dirección de la fotografía no es válida.';
+      }
     }
 
     return {
@@ -211,7 +259,7 @@ export default function UserMascotaNueva() {
       )}
 
       <div className="panel form-panel">
-        <form onSubmit={submit} className="form-grid user-form">
+        <form onSubmit={submit} className="form-grid user-form" noValidate>
           <label>
             Nombre de la mascota
             <input
@@ -246,8 +294,9 @@ export default function UserMascotaNueva() {
               value={form.raza}
               onChange={change}
               maxLength={100}
-              placeholder="Opcional"
+              placeholder="Ej. Pastor Alemán"
             />
+            <small>Opcional. Escribe el nombre de la raza.</small>
           </label>
 
           <label>
@@ -299,7 +348,7 @@ export default function UserMascotaNueva() {
               maxLength={1000}
               placeholder="Color, tamaño, señas particulares, etc."
             />
-            <small>{form.caracteristicas.length}/1000 caracteres</small>
+            <small>{form.caracteristicas.length}/1000 caracteres. Describe las características con palabras.</small>
           </label>
 
           <div className="full-span">
