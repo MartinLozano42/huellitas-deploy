@@ -10,8 +10,177 @@ const router = Router();
 
 router.use(authenticate, requireActiveAccount, requireUser);
 
+// ==========================================
+// VALIDACIONES Y NORMALIZACIÓN
+// ==========================================
+
+const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+const MESSAGE_CONTENT_RE = /[\p{L}\p{N}]/u;
+
+function normalizeText(value) {
+  if (typeof value !== 'string') return null;
+
+  return value
+    .normalize('NFC')
+    .replace(/\u00A0/g, ' ')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .trim();
+}
+
+function readText(value, maxLength, options = {}) {
+  const { optional = false } = options;
+
+  if (value === null || value === undefined) {
+    return optional
+      ? { value: null }
+      : { error: 'Este campo es obligatorio.' };
+  }
+
+  if (typeof value !== 'string') {
+    return { error: 'El formato del campo no es válido.' };
+  }
+
+  const normalized = normalizeText(value);
+
+  if (normalized === null) {
+    return { error: 'El formato del campo no es válido.' };
+  }
+
+  if (!normalized) {
+    return optional
+      ? { value: null }
+      : { error: 'Este campo es obligatorio.' };
+  }
+
+  if (CONTROL_CHAR_RE.test(normalized)) {
+    return { error: 'El campo contiene caracteres no permitidos.' };
+  }
+
+  if (normalized.length > maxLength) {
+    return {
+      error: `El campo no puede superar los ${maxLength} caracteres.`
+    };
+  }
+
+  return { value: normalized };
+}
+
+function readId(value, options = {}) {
+  const { optional = false } = options;
+
+  if (value === null || value === undefined || value === '') {
+    return optional
+      ? { value: null }
+      : { error: 'El identificador es obligatorio.' };
+  }
+
+  if (
+    typeof value !== 'number' &&
+    typeof value !== 'string'
+  ) {
+    return { error: 'El identificador no es válido.' };
+  }
+
+  const text = String(value).trim();
+
+  if (!/^[1-9]\d*$/.test(text)) {
+    return { error: 'El identificador debe ser un entero positivo.' };
+  }
+
+  const id = Number(text);
+
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return { error: 'El identificador no es válido.' };
+  }
+
+  return { value: id };
+}
+
+function readMessage(value) {
+  const result = readText(value, 2000);
+
+  if (result.error) return result;
+
+  if (!MESSAGE_CONTENT_RE.test(result.value)) {
+    return {
+      error: 'El mensaje debe contener letras o números, no solamente símbolos.'
+    };
+  }
+
+  return result;
+}
+
+function readQrCode(value) {
+  if (value === null || value === undefined || value === '') {
+    return { value: null };
+  }
+
+  if (typeof value !== 'string') {
+    return { error: 'El código QR no es válido.' };
+  }
+
+  const code = value.trim();
+
+  if (
+    code.length < 3 ||
+    code.length > 128 ||
+    !/^[A-Za-z0-9_-]+$/.test(code)
+  ) {
+    return { error: 'El código QR tiene un formato no válido.' };
+  }
+
+  return { value: code };
+}
+
+function readBoolean(value) {
+  if (typeof value === 'boolean') {
+    return { value };
+  }
+
+  if (value === 1 || value === '1' || value === 'true') {
+    return { value: true };
+  }
+
+  if (value === 0 || value === '0' || value === 'false') {
+    return { value: false };
+  }
+
+  return {
+    error: 'El valor de activación debe ser verdadero o falso.'
+  };
+}
+
+function readRadio(value) {
+  if (
+    typeof value !== 'number' &&
+    typeof value !== 'string'
+  ) {
+    return { error: 'El radio de búsqueda debe ser numérico.' };
+  }
+
+  const text = String(value).trim();
+
+  if (!/^(?:0|[1-9]\d{0,2})(?:\.\d{1,2})?$/.test(text)) {
+    return { error: 'El radio de búsqueda debe ser un número válido.' };
+  }
+
+  const radio = Number(text);
+
+  if (!Number.isFinite(radio) || radio < 0 || radio > 500) {
+    return {
+      error: 'El radio debe estar entre 0 y 500 km.'
+    };
+  }
+
+  return { value: radio };
+}
+
 function isMissingSprint3Schema(error) {
-  return ['ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR'].includes(error?.code);
+  return [
+    'ER_NO_SUCH_TABLE',
+    'ER_BAD_FIELD_ERROR'
+  ].includes(error?.code);
 }
 
 function schemaError(res) {
@@ -20,17 +189,24 @@ function schemaError(res) {
   });
 }
 
+// ==========================================
+// NOTIFICACIONES
+// ==========================================
+
 // Las notificaciones son secundarias.
 // Si falla su inserción, no debe interrumpir el chat.
+
 async function notifyUser(userId, tipo, titulo, mensaje) {
-  if (!userId) return false;
+  const id = readId(userId);
+
+  if (id.error) return false;
 
   try {
     await pool.query(
       `INSERT INTO notificaciones
         (usuario_id, tipo, titulo, mensaje)
        VALUES (?, ?, ?, ?)`,
-      [userId, tipo, titulo, mensaje]
+      [id.value, tipo, titulo, mensaje]
     );
 
     return true;
@@ -44,21 +220,33 @@ async function notifyUser(userId, tipo, titulo, mensaje) {
   }
 }
 
-// Crea u obtiene una conversación existente para no duplicar el chat.
+// ==========================================
+// CREAR U OBTENER CONVERSACIÓN
+// ==========================================
+
 async function getOrCreateConversation({
   mascotaId = null,
   reporteId = null,
   requesterId,
   targetId
 }) {
-  if (!targetId || Number(targetId) === Number(requesterId)) {
+  const requester = readId(requesterId);
+  const target = readId(targetId);
+
+  if (requester.error || target.error) {
+    const error = new Error('Los usuarios de la conversación no son válidos.');
+    error.status = 400;
+    throw error;
+  }
+
+  if (target.value === requester.value) {
     const error = new Error('No puedes iniciar una conversación contigo mismo.');
     error.status = 409;
     throw error;
   }
 
-  const a = Math.min(Number(requesterId), Number(targetId));
-  const b = Math.max(Number(requesterId), Number(targetId));
+  const a = Math.min(requester.value, target.value);
+  const b = Math.max(requester.value, target.value);
 
   let existing = [];
 
@@ -165,13 +353,13 @@ router.get('/conversaciones', async (req, res) => {
       ]
     );
 
-    res.json(rows);
+    return res.json(rows);
   } catch (error) {
     if (isMissingSprint3Schema(error)) return schemaError(res);
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudieron cargar las conversaciones.'
     });
   }
@@ -183,15 +371,30 @@ router.get('/conversaciones', async (req, res) => {
 
 router.post('/conversaciones', async (req, res) => {
   try {
-    const codigo = String(req.body?.codigo || '').trim();
+    const body = req.body || {};
 
-    const reporteId = req.body?.reporte_id
-      ? Number(req.body.reporte_id)
-      : null;
+    const codigoResult = readQrCode(body.codigo);
+    const reporteResult = readId(body.reporte_id, { optional: true });
+    const avistamientoResult = readId(
+      body.avistamiento_id,
+      { optional: true }
+    );
 
-    const avistamientoId = req.body?.avistamiento_id
-      ? Number(req.body.avistamiento_id)
-      : null;
+    const invalid = [
+      codigoResult,
+      reporteResult,
+      avistamientoResult
+    ].find((item) => item.error);
+
+    if (invalid) {
+      return res.status(400).json({
+        message: invalid.error
+      });
+    }
+
+    const codigo = codigoResult.value;
+    const reporteId = reporteResult.value;
+    const avistamientoId = avistamientoResult.value;
 
     if (!codigo && !reporteId && !avistamientoId) {
       return res.status(400).json({
@@ -200,13 +403,12 @@ router.post('/conversaciones', async (req, res) => {
     }
 
     if (
-      [reporteId, avistamientoId].some(
-        (id) => id !== null &&
-          (!Number.isSafeInteger(id) || id <= 0)
-      )
+      Number(Boolean(codigo)) +
+      Number(Boolean(reporteId)) +
+      Number(Boolean(avistamientoId)) !== 1
     ) {
       return res.status(400).json({
-        message: 'El identificador del reporte o avistamiento no es válido.'
+        message: 'Indica solamente un código QR, un reporte o un avistamiento.'
       });
     }
 
@@ -306,7 +508,15 @@ router.post('/conversaciones', async (req, res) => {
       }
     }
 
-    if (Number(targetId) === Number(req.user.id)) {
+    const target = readId(targetId);
+
+    if (target.error) {
+      return res.status(409).json({
+        message: 'No se pudo determinar el destinatario de la conversación.'
+      });
+    }
+
+    if (target.value === Number(req.user.id)) {
       return res.status(409).json({
         message: 'Este reporte o QR corresponde a tu cuenta; no necesitas iniciar un chat contigo mismo.'
       });
@@ -316,7 +526,7 @@ router.post('/conversaciones', async (req, res) => {
       mascotaId,
       reporteId: relatedReportId,
       requesterId: req.user.id,
-      targetId
+      targetId: target.value
     });
 
     if (conversation.created) {
@@ -330,14 +540,14 @@ router.post('/conversaciones', async (req, res) => {
       const petName = petRows[0]?.nombre || 'una mascota reportada';
 
       await notifyUser(
-        targetId,
+        target.value,
         'CHAT_NUEVO',
         'Nuevo contacto en Huellitas',
         `Alguien quiere contactar contigo por ${petName}.`
       );
     }
 
-    res.status(conversation.created ? 201 : 200).json({
+    return res.status(conversation.created ? 201 : 200).json({
       message: conversation.created
         ? 'Conversación creada.'
         : 'Se abrió la conversación existente.',
@@ -354,7 +564,7 @@ router.post('/conversaciones', async (req, res) => {
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudo iniciar la conversación.'
     });
   }
@@ -365,6 +575,16 @@ router.post('/conversaciones', async (req, res) => {
 // ==========================================
 
 router.get('/conversaciones/:id/mensajes', async (req, res) => {
+  const conversationId = readId(req.params.id);
+
+  if (conversationId.error) {
+    return res.status(400).json({
+      message: 'El identificador de la conversación no es válido.'
+    });
+  }
+
+  const id = conversationId.value;
+
   try {
     const [members] = await pool.query(
       `SELECT id
@@ -375,7 +595,7 @@ router.get('/conversaciones/:id/mensajes', async (req, res) => {
            OR usuario_receptor_id=?
          )
        LIMIT 1`,
-      [req.params.id, req.user.id, req.user.id]
+      [id, req.user.id, req.user.id]
     );
 
     if (!members[0]) {
@@ -390,7 +610,7 @@ router.get('/conversaciones/:id/mensajes', async (req, res) => {
        WHERE conversacion_id=?
          AND remitente_id<>?
          AND leido_at IS NULL`,
-      [req.params.id, req.user.id]
+      [id, req.user.id]
     );
 
     const [rows] = await pool.query(
@@ -406,16 +626,16 @@ router.get('/conversaciones/:id/mensajes', async (req, res) => {
        WHERE msg.conversacion_id=?
        ORDER BY msg.id ASC
        LIMIT 500`,
-      [req.params.id]
+      [id]
     );
 
-    res.json(rows);
+    return res.json(rows);
   } catch (error) {
     if (isMissingSprint3Schema(error)) return schemaError(res);
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudieron cargar los mensajes.'
     });
   }
@@ -426,21 +646,25 @@ router.get('/conversaciones/:id/mensajes', async (req, res) => {
 // ==========================================
 
 router.post('/conversaciones/:id/mensajes', async (req, res) => {
+  const conversationId = readId(req.params.id);
+  const messageResult = readMessage(req.body?.mensaje);
+
+  if (conversationId.error) {
+    return res.status(400).json({
+      message: 'El identificador de la conversación no es válido.'
+    });
+  }
+
+  if (messageResult.error) {
+    return res.status(400).json({
+      message: messageResult.error
+    });
+  }
+
+  const id = conversationId.value;
+  const mensaje = messageResult.value;
+
   try {
-    const mensaje = String(req.body?.mensaje || '').trim();
-
-    if (!mensaje) {
-      return res.status(400).json({
-        message: 'Escribe un mensaje antes de enviarlo.'
-      });
-    }
-
-    if (mensaje.length > 2000) {
-      return res.status(400).json({
-        message: 'El mensaje no puede superar 2000 caracteres.'
-      });
-    }
-
     const [rows] = await pool.query(
       `SELECT
         id,
@@ -454,7 +678,7 @@ router.post('/conversaciones/:id/mensajes', async (req, res) => {
            OR usuario_receptor_id=?
          )
        LIMIT 1`,
-      [req.params.id, req.user.id, req.user.id]
+      [id, req.user.id, req.user.id]
     );
 
     const conversation = rows[0];
@@ -511,13 +735,13 @@ router.post('/conversaciones/:id/mensajes', async (req, res) => {
       [result.insertId]
     );
 
-    res.status(201).json(saved[0]);
+    return res.status(201).json(saved[0]);
   } catch (error) {
     if (isMissingSprint3Schema(error)) return schemaError(res);
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudo enviar el mensaje.'
     });
   }
@@ -552,7 +776,7 @@ router.get('/notificaciones', async (req, res) => {
       [req.user.id]
     );
 
-    res.json({
+    return res.json({
       items: rows,
       no_leidas: Number(counts.no_leidas || 0)
     });
@@ -561,7 +785,7 @@ router.get('/notificaciones', async (req, res) => {
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudieron cargar las notificaciones.'
     });
   }
@@ -572,21 +796,21 @@ router.get('/notificaciones', async (req, res) => {
 // ==========================================
 
 router.patch('/notificaciones/:id/leida', async (req, res) => {
+  const notificationId = readId(req.params.id);
+
+  if (notificationId.error) {
+    return res.status(400).json({
+      message: 'El identificador de la notificación no es válido.'
+    });
+  }
+
   try {
-    const notificationId = Number(req.params.id);
-
-    if (!Number.isSafeInteger(notificationId) || notificationId <= 0) {
-      return res.status(400).json({
-        message: 'El identificador de la notificación no es válido.'
-      });
-    }
-
     const [result] = await pool.query(
       `UPDATE notificaciones
        SET leida=TRUE
        WHERE id=?
          AND usuario_id=?`,
-      [notificationId, req.user.id]
+      [notificationId.value, req.user.id]
     );
 
     if (!result.affectedRows) {
@@ -595,7 +819,7 @@ router.patch('/notificaciones/:id/leida', async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       message: 'Notificación marcada como leída.'
     });
   } catch (error) {
@@ -603,7 +827,7 @@ router.patch('/notificaciones/:id/leida', async (req, res) => {
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudo actualizar la notificación.'
     });
   }
@@ -623,7 +847,7 @@ router.patch('/notificaciones/leidas/todas', async (req, res) => {
       [req.user.id]
     );
 
-    res.json({
+    return res.json({
       message: 'Todas las notificaciones se marcaron como leídas.'
     });
   } catch (error) {
@@ -631,7 +855,7 @@ router.patch('/notificaciones/leidas/todas', async (req, res) => {
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudieron actualizar las notificaciones.'
     });
   }
@@ -654,7 +878,7 @@ router.get('/preferencias-alertas', async (req, res) => {
       [req.user.id]
     );
 
-    res.json(
+    return res.json(
       rows[0] || {
         latitud: null,
         longitud: null,
@@ -667,7 +891,7 @@ router.get('/preferencias-alertas', async (req, res) => {
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudieron cargar las preferencias de alertas.'
     });
   }
@@ -678,16 +902,32 @@ router.get('/preferencias-alertas', async (req, res) => {
 // ==========================================
 
 router.put('/preferencias-alertas', async (req, res) => {
+  const body = req.body || {};
+
+  const radioResult = body.radio_km === undefined
+    ? { value: 10 }
+    : readRadio(body.radio_km);
+
+  const activeResult = body.activo === undefined
+    ? { value: false }
+    : readBoolean(body.activo);
+
+  if (radioResult.error) {
+    return res.status(400).json({
+      message: radioResult.error
+    });
+  }
+
+  if (activeResult.error) {
+    return res.status(400).json({
+      message: activeResult.error
+    });
+  }
+
+  const radio = radioResult.value;
+  const activo = activeResult.value;
+
   try {
-    const radio = Number(req.body?.radio_km ?? 10);
-    const activo = Boolean(req.body?.activo);
-
-    if (!Number.isFinite(radio) || radio < 0 || radio > 500) {
-      return res.status(400).json({
-        message: 'El radio debe estar entre 0 y 500 km.'
-      });
-    }
-
     await pool.query(
       `INSERT INTO preferencias_notificacion
         (
@@ -702,7 +942,7 @@ router.put('/preferencias-alertas', async (req, res) => {
       [req.user.id, radio, activo ? 1 : 0]
     );
 
-    res.json({
+    return res.json({
       message: 'Preferencias de alertas guardadas.',
       latitud: null,
       longitud: null,
@@ -714,7 +954,7 @@ router.put('/preferencias-alertas', async (req, res) => {
 
     console.error(error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'No se pudieron guardar las preferencias de alertas.'
     });
   }
