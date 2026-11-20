@@ -1,629 +1,432 @@
-import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Download, Image as ImageIcon, PawPrint } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Camera, PawPrint, Save, X } from 'lucide-react';
+import { useNavigate, useParams } from 'react-router-dom';
 import api, { mediaUrl } from '../api.js';
+import { prepareImageForUpload } from '../imageUpload.js';
 
-const palettes = {
-  impacto: {
-    rojo: { top: '#b91c1c', accent: '#facc15', bottom: '#b91c1c', ink: '#17212b' },
-    azul: { top: '#075985', accent: '#f59e0b', bottom: '#082f49', ink: '#ffffff' },
-    verde: { top: '#166534', accent: '#fde047', bottom: '#14532d', ink: '#ffffff' },
-    morado: { top: '#6b21a8', accent: '#f5d0fe', bottom: '#3b0764', ink: '#ffffff' },
-    rosa: { top: '#be185d', accent: '#fce7f3', bottom: '#831843', ink: '#ffffff' },
-    negro: { top: '#111827', accent: '#fbbf24', bottom: '#030712', ink: '#ffffff' }
-  },
-  comunidad: {
-    oceano: { top: '#123b5d', accent: '#42c6c5', bottom: '#e8f4f5', ink: '#123047', secondary: '#087e8b' },
-    lavanda: { top: '#49306b', accent: '#e2b8ff', bottom: '#f5effb', ink: '#35234d', secondary: '#8054a6' },
-    coral: { top: '#9f3d3d', accent: '#ffb199', bottom: '#fff1eb', ink: '#542d32', secondary: '#d96b59' },
-    bosque: { top: '#245b4a', accent: '#c5df9b', bottom: '#eff6e9', ink: '#234638', secondary: '#54866a' },
-    atardecer: { top: '#59415f', accent: '#ffc857', bottom: '#fff5df', ink: '#443348', secondary: '#d17b45' },
-    carbon: { top: '#303943', accent: '#c4e86b', bottom: '#edf1f2', ink: '#26313a', secondary: '#647d36' }
-  }
+const VALID_SPECIES = ['PERRO', 'GATO', 'OTRO'];
+const VALID_SEXES = ['MACHO', 'HEMBRA'];
+const VALID_VACCINATION = ['SI', 'NO'];
+
+const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+const LETTER_RE = /\p{L}/u;
+const CHARACTERISTICS_RE = /^[\p{L} \r\n]+$/u;
+const NAME_RE = /^[\p{L}][\p{L}\s'-]{0,99}$/u;
+const BREED_RE = /^[\p{L}][\p{L}\s'().-]{0,99}$/u;
+const IMAGE_LOCAL_RE = /^\/uploads\/images\/[A-Za-z0-9._-]+$/;
+
+const INITIAL_FORM = {
+  nombre: '',
+  especie: 'PERRO',
+  raza: '',
+  sexo: 'MACHO',
+  edad: '0',
+  vacunado: 'SI',
+  caracteristicas: '',
+  foto: '',
+  mostrar_contacto_qr: false
 };
 
-const LOCATION_RE = /^[\p{L}\p{N}][\p{L}\p{N}\s.,#°ºª'()/\-]{1,138}$/u;
-const PHONE_RE = /^\+?[0-9]{7,15}$/;
-const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+function normalizeText(value) {
+  if (typeof value !== 'string') return null;
 
-function normalizePhone(value) {
-  return value.replace(/[\s()-]/g, '');
+  return value
+    .normalize('NFC')
+    .replace(/\u00A0/g, ' ')
+    .replace(/\r\n?/g, '\n');
 }
 
-function validDate(value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+function validateText(value, options = {}) {
+  const {
+    required = false,
+    maxLength = 1000,
+    minLength = 1,
+    requireLetters = false,
+    allowNewLines = false
+  } = options;
 
-  const date = new Date(`${value}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return false;
-
-  const [year, month, day] = value.split('-').map(Number);
-
-  if (
-    date.getFullYear() !== year ||
-    date.getMonth() + 1 !== month ||
-    date.getDate() !== day
-  ) {
-    return false;
+  if (typeof value !== 'string') {
+    return { error: 'El formato del campo no es válido.' };
   }
 
-  const today = new Date();
-  today.setHours(23, 59, 59, 999);
+  let normalized = normalizeText(value);
 
-  return date <= today;
+  if (normalized === null) {
+    return { error: 'El formato del campo no es válido.' };
+  }
+
+  if (CONTROL_CHAR_RE.test(normalized)) {
+    return { error: 'El campo contiene caracteres no permitidos.' };
+  }
+
+  if (!allowNewLines) {
+    normalized = normalized.replace(/\s+/g, ' ');
+  } else {
+    normalized = normalized
+      .split('\n')
+      .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+      .join('\n');
+  }
+
+  normalized = normalized.trim();
+
+  if (!normalized) {
+    return required
+      ? { error: 'Este campo es obligatorio.' }
+      : { value: '' };
+  }
+
+  if (normalized.length < minLength) {
+    return {
+      error: `El campo debe tener al menos ${minLength} caracteres.`
+    };
+  }
+
+  if (normalized.length > maxLength) {
+    return {
+      error: `El campo no puede superar los ${maxLength} caracteres.`
+    };
+  }
+
+  if (requireLetters && !LETTER_RE.test(normalized)) {
+    return {
+      error: 'El campo debe contener letras.'
+    };
+  }
+
+  return { value: normalized };
 }
 
-function validatePoster(form) {
-  const ubicacion = form.ubicacion.trim().replace(/\s+/g, ' ');
-  const contacto = form.contacto.trim();
-  const descripcion = form.descripcion.trim().replace(/\s+/g, ' ');
+function validateImageUrl(value) {
+  const image = value.trim();
 
-  if (!ubicacion) {
-    return 'La ubicación donde se perdió la mascota es obligatoria.';
+  if (!image) return { value: '' };
+
+  if (image.length > 500) {
+    return {
+      error: 'La dirección de la fotografía es demasiado larga.'
+    };
   }
 
-  if (ubicacion.length < 3 || ubicacion.length > 140 || !LOCATION_RE.test(ubicacion)) {
-    return 'La ubicación debe tener entre 3 y 140 caracteres y contener una dirección o referencia válida.';
+  if (IMAGE_LOCAL_RE.test(image)) {
+    return { value: image };
   }
 
-  if (!validDate(form.fecha)) {
-    return 'Selecciona una fecha real y no futura.';
+  try {
+    const url = new URL(image);
+
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      !url.hostname ||
+      url.username ||
+      url.password
+    ) {
+      return {
+        error: 'La fotografía debe tener una URL HTTP o HTTPS válida.'
+      };
+    }
+
+    return { value: url.toString() };
+  } catch {
+    return {
+      error: 'Introduce una URL válida o selecciona una fotografía cargada en Huellitas.'
+    };
   }
-
-  if (!contacto) {
-    return 'El teléfono de contacto es obligatorio.';
-  }
-
-  const phone = normalizePhone(contacto);
-
-  if (!PHONE_RE.test(phone) || !/^[0-9+()\s-]+$/.test(contacto)) {
-    return 'El contacto debe ser un teléfono válido de entre 7 y 15 dígitos.';
-  }
-
-  if (descripcion.length > 250) {
-    return 'La descripción no puede superar los 250 caracteres.';
-  }
-
-  if (descripcion && CONTROL_RE.test(descripcion)) {
-    return 'La descripción contiene caracteres no permitidos.';
-  }
-
-  if (descripcion && !/[\p{L}]/u.test(descripcion)) {
-    return 'La descripción debe contener palabras, no solamente números o símbolos.';
-  }
-
-  if (descripcion && !/[\p{L}\p{N}]/u.test(descripcion)) {
-    return 'La descripción no contiene información válida.';
-  }
-
-  return {
-    ubicacion,
-    contacto: phone,
-    descripcion
-  };
 }
 
-export default function UserAfichePerdida() {
-  const canvasRef = useRef(null);
-  const [searchParams] = useSearchParams();
+export default function UserMascotaEditar() {
+  const { id } = useParams();
+  const navigate = useNavigate();
 
-  const [pets, setPets] = useState([]);
+  const [form, setForm] = useState(INITIAL_FORM);
   const [error, setError] = useState('');
-  const [petId, setPetId] = useState('');
-
-  const [form, setForm] = useState({
-    ubicacion: '',
-    fecha: new Date().toLocaleDateString('en-CA'),
-    contacto: '',
-    descripcion: '',
-    color: 'rojo',
-    plantilla: 'impacto'
-  });
-
-  const [photo, setPhoto] = useState('');
-  const [photoLoaded, setPhotoLoaded] = useState(null);
-
-  useEffect(() => {
-    api.get('/user/mascotas')
-      .then(({ data }) => {
-        setPets(data);
-
-        const requested = data.find(
-          (p) => String(p.id) === searchParams.get('mascota')
-        );
-
-        const initial = requested || data[0];
-
-        if (initial) {
-          setPetId(String(initial.id));
-          setPhoto(initial.foto || '');
-        }
-      })
-      .catch((e) => {
-        setError(
-          e.response?.data?.message ||
-          'No se pudieron cargar tus mascotas.'
-        );
-      });
-  }, [searchParams]);
-
-  const pet = pets.find((p) => String(p.id) === String(petId));
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoPreview, setPhotoPreview] = useState('');
 
   useEffect(() => {
     let cancelled = false;
 
-    setPhotoLoaded(null);
+    async function loadPet() {
+      setLoading(true);
+      setError('');
 
-    if (!photo) return;
+      try {
+        const { data } = await api.get(`/user/mascotas/${id}`);
 
-    const img = new Image();
-    const resolved = mediaUrl(photo);
+        if (cancelled) return;
 
-    try {
-      if (new URL(resolved).origin !== window.location.origin) {
-        img.crossOrigin = 'anonymous';
+        setForm({
+          nombre: data.nombre || '',
+          especie: data.especie || 'PERRO',
+          raza: data.raza || '',
+          sexo: data.sexo || 'MACHO',
+          edad: String(data.edad ?? 0),
+          vacunado:
+            String(data.vacunado || 'NO').toUpperCase() === 'SI'
+              ? 'SI'
+              : 'NO',
+          caracteristicas: data.caracteristicas || '',
+          foto: data.foto || '',
+          mostrar_contacto_qr:
+            Boolean(
+              data.mostrar_contacto_qr === true ||
+              data.mostrar_contacto_qr === 1 ||
+              data.mostrar_contacto_qr === '1'
+            )
+        });
+
+        setPhotoPreview(data.foto || '');
+      } catch (e) {
+        if (!cancelled) {
+          setError(
+            e.response?.data?.message ||
+            'No se pudieron cargar los datos de la mascota.'
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    } catch {}
+    }
 
-    img.onload = () => {
-      if (!cancelled) {
-        setPhotoLoaded(img);
-        setError('');
-      }
-    };
-
-    img.onerror = () => {
-      if (!cancelled) {
-        setPhotoLoaded(null);
-        setError('No se encontró la fotografía. Vuelve a subirla desde Editar mascota.');
-      }
-    };
-
-    img.src = resolved;
+    if (id) {
+      loadPet();
+    } else {
+      setError('No se recibió el identificador de la mascota.');
+      setLoading(false);
+    }
 
     return () => {
       cancelled = true;
     };
-  }, [photo]);
+  }, [id]);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    const w = 800;
-    const h = 1120;
-
-    const c =
-      (palettes[form.plantilla] || palettes.impacto)[form.color] ||
-      palettes.impacto.rojo;
-
-    canvas.width = w;
-    canvas.height = h;
-
-    const drawPetPhoto = (x, y, width, height, radius = 0) => {
-      ctx.save();
-
-      if (radius > 0) {
-        ctx.beginPath();
-        ctx.roundRect(x, y, width, height, radius);
-        ctx.clip();
-      }
-
-      ctx.fillStyle = '#e5edf1';
-      ctx.fillRect(x, y, width, height);
-
-      if (photoLoaded) {
-        const scale = Math.min(
-          width / photoLoaded.width,
-          height / photoLoaded.height
-        );
-
-        const dw = photoLoaded.width * scale;
-        const dh = photoLoaded.height * scale;
-
-        ctx.drawImage(
-          photoLoaded,
-          x + (width - dw) / 2,
-          y + (height - dh) / 2,
-          dw,
-          dh
-        );
-      } else {
-        ctx.fillStyle = '#64748b';
-        ctx.font = 'bold 26px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('FOTO DE LA MASCOTA', x + width / 2, y + height / 2);
-      }
-
-      ctx.restore();
-    };
-
-    const drawCentered = (text, y, font, color, maxWidth = 720) => {
-      ctx.textAlign = 'center';
-      ctx.fillStyle = color;
-      ctx.font = font;
-
-      const value = String(text || '');
-
-      while (
-        ctx.measureText(value).width > maxWidth &&
-        font.match(/\d+/)
-      ) {
-        const size = Number(font.match(/\d+/)[0]);
-
-        if (size <= 18) break;
-
-        ctx.font = font.replace(/\d+px/, `${size - 2}px`);
-      }
-
-      ctx.fillText(value, w / 2, y, maxWidth);
-    };
-
-    ctx.clearRect(0, 0, w, h);
-
-    if (form.plantilla === 'comunidad') {
-      const navy = c.top;
-      const blue = c.secondary;
-      const orange = c.accent;
-
-      ctx.fillStyle = c.bottom;
-      ctx.fillRect(0, 0, w, h);
-
-      ctx.fillStyle = navy;
-      ctx.fillRect(0, 0, w, 190);
-
-      ctx.fillStyle = orange;
-      ctx.fillRect(0, 0, w, 14);
-
-      drawCentered('¿LA HAS VISTO?', 76, '900 46px Arial', '#ffffff', 740);
-      drawCentered('AYÚDANOS A ENCONTRARLA', 133, 'bold 31px Arial', orange, 740);
-
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(42, 168, 716, 56);
-
-      drawCentered(
-        (pet?.nombre || 'NOMBRE DE LA MASCOTA').toLocaleUpperCase().slice(0, 32),
-        207,
-        'bold 31px Arial',
-        navy,
-        680
-      );
-
-      drawPetPhoto(115, 245, 570, 330, 18);
-
-      ctx.fillStyle = blue;
-      ctx.fillRect(42, 600, 716, 10);
-
-      drawCentered('ÚLTIMA UBICACIÓN', 654, 'bold 25px Arial', navy, 700);
-
-      ctx.fillStyle = navy;
-      ctx.font = 'bold 31px Arial';
-
-      wrapText(
-        ctx,
-        form.ubicacion.trim() || 'Añade la ubicación',
-        w / 2,
-        700,
-        680,
-        38,
-        2
-      );
-
-      if (form.descripcion.trim()) {
-        ctx.fillStyle = c.ink;
-        ctx.font = 'italic 21px Arial';
-
-        wrapText(
-          ctx,
-          form.descripcion.trim(),
-          w / 2,
-          776,
-          680,
-          27,
-          2
-        );
-      }
-
-      ctx.fillStyle = c.bottom;
-      ctx.fillRect(42, 838, 716, 116);
-
-      drawCentered(
-        'SI TIENES INFORMACIÓN, CONTÁCTANOS',
-        880,
-        'bold 21px Arial',
-        navy,
-        680
-      );
-
-      drawCentered(
-        form.contacto.trim() || 'Añade teléfono de contacto',
-        924,
-        'bold 30px Arial',
-        blue,
-        680
-      );
-
-      ctx.fillStyle = orange;
-      ctx.fillRect(42, 980, 716, 70);
-
-      drawCentered(
-        '¡AYÚDANOS A QUE VUELVA A CASA!',
-        1024,
-        'bold 24px Arial',
-        navy,
-        680
-      );
-
-      drawCentered(
-        `${pet?.especie || 'MASCOTA'}${pet?.raza ? ` · ${pet.raza}` : ''}${form.fecha ? ` · ${form.fecha}` : ''}`,
-        1085,
-        '18px Arial',
-        c.ink,
-        720
-      );
-    } else {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, w, h);
-
-      ctx.fillStyle = c.top;
-      ctx.fillRect(0, 0, w, 132);
-
-      drawCentered('MASCOTA PERDIDA', 57, '900 43px Arial', c.ink, 740);
-      drawCentered('AYÚDANOS A ENCONTRARLA', 103, 'bold 29px Arial', c.ink, 740);
-
-      ctx.fillStyle = c.accent;
-      ctx.fillRect(44, 126, w - 88, 58);
-
-      drawCentered(
-        (pet?.nombre || 'NOMBRE DE LA MASCOTA').toLocaleUpperCase().slice(0, 32),
-        165,
-        'bold 31px Arial',
-        c.top === '#b91c1c' ? '#111827' : c.bottom,
-        680
-      );
-
-      drawPetPhoto(100, 205, 600, 345, 8);
-
-      ctx.fillStyle = c.bottom;
-      ctx.fillRect(0, 575, w, 545);
-
-      drawCentered('VISTO POR ÚLTIMA VEZ EN:', 625, 'bold 26px Arial', c.ink, 740);
-
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 31px Arial';
-
-      wrapText(
-        ctx,
-        form.ubicacion.trim() || 'Añade la ubicación',
-        w / 2,
-        674,
-        690,
-        38,
-        2
-      );
-
-      if (form.descripcion.trim()) {
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'italic 20px Arial';
-
-        wrapText(
-          ctx,
-          form.descripcion.trim(),
-          w / 2,
-          745,
-          690,
-          26,
-          2
-        );
-      }
-
-      ctx.fillStyle = c.accent;
-      ctx.fillRect(52, 802, w - 104, 5);
-
-      drawCentered(
-        'SI LA VES, ¡CONTÁCTANOS!',
-        850,
-        'bold 25px Arial',
-        c.ink,
-        720
-      );
-
-      drawCentered(
-        form.contacto.trim() || 'Añade teléfono de contacto',
-        901,
-        'bold 31px Arial',
-        '#ffffff',
-        720
-      );
-
-      ctx.fillStyle = c.accent;
-      ctx.fillRect(44, 945, w - 88, 70);
-
-      drawCentered(
-        '¡AYÚDANOS A QUE VUELVA A CASA!',
-        989,
-        'bold 24px Arial',
-        c.bottom,
-        680
-      );
-
-      drawCentered(
-        `${pet?.especie || 'MASCOTA'}${pet?.raza ? ` · ${pet.raza}` : ''}${form.fecha ? ` · ${form.fecha}` : ''}`,
-        1065,
-        '18px Arial',
-        c.ink,
-        720
-      );
-    }
-  }, [pet, form, photoLoaded]);
-
-  function wrapText(ctx, text, x, y, maxWidth, lineHeight, maxLines) {
-    const words = text.split(/\s+/);
-    let line = '';
-    let lines = [];
-
-    for (const word of words) {
-      const test = line ? `${line} ${word}` : word;
-
-      if (ctx.measureText(test).width > maxWidth && line) {
-        lines.push(line);
-        line = word;
-      } else {
-        line = test;
-      }
-    }
-
-    if (line) lines.push(line);
-
-    lines = lines.slice(0, maxLines);
-
-    lines.forEach((item, index) => {
-      ctx.fillText(item, x, y + index * lineHeight);
-    });
-  }
-
-  function selectPet(e) {
-    const id = e.target.value;
-
-    setPetId(id);
-
-    const chosen = pets.find((p) => String(p.id) === id);
-
-    setPhoto(chosen?.foto || '');
-  }
-
-  function updateForm(e) {
-    const { name, value } = e.target;
+  function change(event) {
+    const { name, value, type, checked } = event.target;
 
     setForm((current) => ({
       ...current,
-      [name]: value
+      [name]: type === 'checkbox' ? checked : value
     }));
 
-    setError('');
+    if (error) setError('');
   }
 
-  function selectTemplate(value) {
-    setForm((current) => ({
-      ...current,
-      plantilla: value,
-      color: value === 'comunidad' ? 'oceano' : 'rojo'
-    }));
-  }
-
-  function uploadPhoto(e) {
-    const file = e.target.files?.[0];
-
-    e.target.value = '';
+  async function uploadPetPhoto(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
 
     if (!file) return;
 
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      setError('Solo se permiten fotografías JPG, PNG o WEBP.');
+      setError('Selecciona una imagen JPG, PNG o WEBP.');
       return;
     }
 
-    if (file.size <= 0 || file.size > 10 * 1024 * 1024) {
-      setError('La fotografía debe tener un tamaño máximo de 10 MB.');
+    if (file.size <= 0 || file.size > 15 * 1024 * 1024) {
+      setError('La imagen original no puede superar los 15 MB.');
       return;
     }
 
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') {
-        setError('No se pudo leer la fotografía.');
-        return;
-      }
-
-      const img = new Image();
-
-      img.onload = () => {
-        setPhoto(reader.result);
-        setPhotoLoaded(img);
-        setError('');
-      };
-
-      img.onerror = () => {
-        setError('El archivo seleccionado no contiene una imagen válida.');
-      };
-
-      img.src = reader.result;
-    };
-
-    reader.onerror = () => {
-      setError('No se pudo leer la fotografía.');
-    };
-
-    reader.readAsDataURL(file);
-  }
-
-  function download() {
-    const canvas = canvasRef.current;
-
-    if (!canvas || !pet) return;
-
-    const validation = validatePoster(form);
-
-    if (typeof validation === 'string') {
-      setError(validation);
-      return;
-    }
-
-    if (!photoLoaded) {
-      setError('Espera a que la fotografía de la mascota termine de cargar.');
-      return;
-    }
+    setError('');
+    setUploadingPhoto(true);
 
     try {
-      const link = document.createElement('a');
+      const optimized = await prepareImageForUpload(file);
 
-      link.download =
-        `Huellitas-afiche-${pet.nombre.replace(/[^a-z0-9-_]/gi, '-')}.png`;
-
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-
-      setError('');
-    } catch {
-      setError(
-        'No se pudo exportar la foto. Comprueba que el servicio externo permita exportación desde el navegador.'
+      const { data } = await api.post(
+        '/user/uploads/imagen',
+        optimized
       );
+
+      if (!data?.url || typeof data.url !== 'string') {
+        throw new Error(
+          'El servidor no devolvió la dirección de la imagen.'
+        );
+      }
+
+      const validatedImage = validateImageUrl(data.url);
+
+      if (validatedImage.error) {
+        throw new Error(validatedImage.error);
+      }
+
+      setForm((current) => ({
+        ...current,
+        foto: validatedImage.value
+      }));
+
+      setPhotoPreview(validatedImage.value);
+    } catch (e) {
+      setError(
+        e.response?.data?.message ||
+        e.message ||
+        'No se pudo subir la fotografía.'
+      );
+    } finally {
+      setUploadingPhoto(false);
     }
   }
 
-  const colorOptions =
-    form.plantilla === 'comunidad'
-      ? [
-          ['oceano', 'Océano y turquesa'],
-          ['lavanda', 'Lavanda y violeta'],
-          ['coral', 'Coral y crema'],
-          ['bosque', 'Bosque y salvia'],
-          ['atardecer', 'Atardecer y ámbar'],
-          ['carbon', 'Carbón y lima']
-        ]
-      : [
-          ['rojo', 'Rojo y amarillo'],
-          ['azul', 'Azul y naranja'],
-          ['verde', 'Verde y amarillo'],
-          ['morado', 'Morado'],
-          ['rosa', 'Rosa'],
-          ['negro', 'Negro y dorado']
-        ];
+  function validateForm() {
+    const nombreResult = validateText(form.nombre, {
+      required: true,
+      minLength: 2,
+      maxLength: 100,
+      requireLetters: true
+    });
+
+    if (nombreResult.error) return nombreResult.error;
+
+    if (!NAME_RE.test(nombreResult.value)) {
+      return 'El nombre solo puede contener letras, espacios, guiones y apóstrofes.';
+    }
+
+    if (!VALID_SPECIES.includes(form.especie)) {
+      return 'Selecciona una especie válida.';
+    }
+
+    const razaResult = validateText(form.raza, {
+      maxLength: 100,
+      requireLetters: true
+    });
+
+    if (razaResult.error) return razaResult.error;
+
+    if (razaResult.value && !BREED_RE.test(razaResult.value)) {
+      return 'La raza contiene caracteres no permitidos.';
+    }
+
+    if (!VALID_SEXES.includes(form.sexo)) {
+      return 'Selecciona un sexo válido.';
+    }
+
+    const edadText = String(form.edad).trim();
+
+    if (!/^(0|[1-9]\d*)$/.test(edadText)) {
+      return 'La edad debe ser un número entero válido.';
+    }
+
+    const edad = Number(edadText);
+
+    if (!Number.isSafeInteger(edad) || edad < 0 || edad > 40) {
+      return 'La edad debe estar entre 0 y 40 años.';
+    }
+
+    if (!VALID_VACCINATION.includes(form.vacunado)) {
+      return 'Selecciona una opción válida para la vacunación.';
+    }
+
+    const caracteristicasResult = validateText(
+      form.caracteristicas,
+      {
+        maxLength: 1000,
+        minLength: 3,
+        requireLetters: true,
+        allowNewLines: true
+      }
+    );
+
+    if (caracteristicasResult.error) {
+      return caracteristicasResult.error;
+    }
+
+    if (caracteristicasResult.value) {
+      if (!CHARACTERISTICS_RE.test(caracteristicasResult.value)) {
+        return 'Las características solo pueden contener letras y espacios. No se permiten números ni caracteres especiales.';
+      }
+
+      const letters =
+        caracteristicasResult.value.match(/\p{L}/gu) || [];
+
+      if (letters.length < 3) {
+        return 'Las características deben contener al menos 3 letras.';
+      }
+    }
+
+    const fotoResult = validateImageUrl(form.foto);
+
+    if (fotoResult.error) return fotoResult.error;
+
+    return {
+      nombre: nombreResult.value,
+      especie: form.especie,
+      raza: razaResult.value,
+      sexo: form.sexo,
+      edad,
+      vacunado: form.vacunado,
+      caracteristicas: caracteristicasResult.value,
+      foto: fotoResult.value,
+      mostrar_contacto_qr: form.mostrar_contacto_qr ? 1 : 0
+    };
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+
+    if (saving || uploadingPhoto || loading) return;
+
+    const validated = validateForm();
+
+    if (typeof validated === 'string') {
+      setError(validated);
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const { data } = await api.put(
+        `/user/mascotas/${id}`,
+        validated
+      );
+
+      navigate(`/usuario/mascotas/${id}`, {
+        replace: true,
+        state: {
+          message: data?.message || 'Mascota actualizada correctamente.'
+        }
+      });
+    } catch (e) {
+      setError(
+        e.response?.data?.message ||
+        'No se pudieron guardar los cambios de la mascota.'
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function removePhoto() {
+    setForm((current) => ({
+      ...current,
+      foto: ''
+    }));
+
+    setPhotoPreview('');
+  }
+
+  if (loading) {
+    return (
+      <div className="loading" role="status">
+        Cargando datos de la mascota...
+      </div>
+    );
+  }
 
   return (
     <div>
       <div className="page-header">
         <div>
           <div className="page-title-row">
-            <ImageIcon size={24} />
-            <h1>Generador de afiches</h1>
+            <PawPrint size={24} />
+            <h1>Editar mascota</h1>
           </div>
 
           <p>
-            Diseña y descarga un afiche para compartir manualmente.
-            No necesita conectar redes sociales.
+            Modifica la información de tu mascota y guarda los cambios.
           </p>
         </div>
       </div>
@@ -634,157 +437,217 @@ export default function UserAfichePerdida() {
         </div>
       )}
 
-      {!pets.length ? (
-        <div className="empty-state">
-          <PawPrint size={32} />
-          <p>Primero registra una mascota para crear su afiche.</p>
-        </div>
-      ) : (
-        <div className="poster-workspace">
-          <section className="panel poster-controls">
-            <h2>Personaliza el aviso</h2>
+      <div className="panel form-panel">
+        <form onSubmit={submit} className="form-grid user-form">
+          <label>
+            Nombre de la mascota
 
-            <label>
-              Mascota registrada
-              <select value={petId} onChange={selectPet}>
-                {pets.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.nombre} · {p.especie}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <input
+              name="nombre"
+              value={form.nombre}
+              onChange={change}
+              maxLength={100}
+              autoComplete="off"
+              required
+            />
 
-            <label>
-              Plantilla
-              <select
-                value={form.plantilla}
-                onChange={(e) => selectTemplate(e.target.value)}
-              >
-                <option value="impacto">Impacto clásico</option>
-                <option value="comunidad">Ayuda de la comunidad</option>
-              </select>
-            </label>
+            <small>
+              Solo letras, espacios, guiones y apóstrofes.
+            </small>
+          </label>
 
-            <label>
-              Colores
-              <select
-                value={form.color}
-                onChange={(e) => updateForm(e)}
-                name="color"
-              >
-                {colorOptions.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <label>
+            Especie
 
-            <label>
-              Ubicación donde se perdió
-              <input
-                name="ubicacion"
-                value={form.ubicacion}
-                maxLength={140}
-                onChange={updateForm}
-                placeholder="Barrio, calle o referencia"
-                autoComplete="off"
-              />
-              <small>
-                Se permiten letras, números, espacios y referencias de dirección.
-              </small>
-            </label>
+            <select
+              name="especie"
+              value={form.especie}
+              onChange={change}
+            >
+              <option value="PERRO">Perro</option>
+              <option value="GATO">Gato</option>
+              <option value="OTRO">Otro</option>
+            </select>
+          </label>
 
-            <label>
-              Fecha
-              <input
-                name="fecha"
-                type="date"
-                value={form.fecha}
-                max={new Date().toLocaleDateString('en-CA')}
-                onChange={updateForm}
-              />
-            </label>
+          <label>
+            Raza
 
-            <label>
-              Contacto telefónico que quieres publicar
-              <input
-                name="contacto"
-                type="tel"
-                value={form.contacto}
-                maxLength={30}
-                onChange={updateForm}
-                placeholder="Ej. 71234567"
-                inputMode="tel"
-                autoComplete="tel"
-              />
-              <small>
-                Se aceptan números y prefijo internacional. Este número aparecerá públicamente en el afiche.
-              </small>
-            </label>
+            <input
+              name="raza"
+              value={form.raza}
+              onChange={change}
+              maxLength={100}
+              placeholder="Opcional"
+            />
+          </label>
 
-            <label>
-              Descripción breve (opcional)
-              <textarea
-                name="descripcion"
-                rows="3"
-                maxLength={250}
-                value={form.descripcion}
-                onChange={updateForm}
-                placeholder="Señas particulares, color, tamaño..."
-              />
-              <small>
-                {form.descripcion.length}/250 caracteres.
-              </small>
-            </label>
+          <label>
+            Sexo
 
-            <label>
-              Foto para el afiche
+            <select
+              name="sexo"
+              value={form.sexo}
+              onChange={change}
+            >
+              <option value="MACHO">Macho</option>
+              <option value="HEMBRA">Hembra</option>
+            </select>
+          </label>
+
+          <label>
+            Edad
+
+            <input
+              name="edad"
+              type="number"
+              min="0"
+              max="40"
+              step="1"
+              value={form.edad}
+              onChange={change}
+              required
+            />
+
+            <small>Edad expresada en años.</small>
+          </label>
+
+          <label>
+            Vacunado
+
+            <select
+              name="vacunado"
+              value={form.vacunado}
+              onChange={change}
+            >
+              <option value="SI">Sí</option>
+              <option value="NO">No</option>
+            </select>
+          </label>
+
+          <label className="full-span">
+            Características
+
+            <textarea
+              name="caracteristicas"
+              value={form.caracteristicas}
+              onChange={change}
+              rows="4"
+              maxLength={1000}
+              placeholder="Color, tamaño, señas particulares, etc."
+            />
+
+            <small>
+              Solo letras, tildes, espacios y saltos de línea.
+              {' '}{form.caracteristicas.length}/1000 caracteres.
+              No se permiten números ni caracteres especiales.
+            </small>
+          </label>
+
+          <div className="full-span">
+            <span className="field-label">
+              Fotografía de la mascota
+            </span>
+
+            <label className="report-photo-uploader">
+              <Camera size={24} />
+
+              <strong>
+                {uploadingPhoto
+                  ? 'Subiendo fotografía...'
+                  : 'Cambiar fotografía'}
+              </strong>
+
+              <span>
+                JPG, PNG o WEBP · máximo 15 MB
+              </span>
+
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
-                onChange={uploadPhoto}
+                onChange={uploadPetPhoto}
+                disabled={uploadingPhoto || saving}
               />
-              <small>JPG, PNG o WEBP · máximo 10 MB.</small>
             </label>
 
-            <button
-              className="primary-button"
-              type="button"
-              onClick={download}
-              disabled={!pet}
-            >
-              <Download size={17} />
-              Descargar afiche PNG
-            </button>
+            <label className="pet-image-url-label">
+              URL de imagen
 
-            <p className="muted">
-              Publica solamente los datos de contacto que quieras hacer visibles.
-              El afiche se genera en tu navegador.
-            </p>
-          </section>
+              <input
+                name="foto"
+                type="url"
+                value={form.foto}
+                onChange={(event) => {
+                  change(event);
+                  setPhotoPreview(event.target.value);
+                }}
+                placeholder="https://..."
+              />
+            </label>
 
-          <section className="panel poster-preview">
-            <h2>Vista previa</h2>
+            {(photoPreview || form.foto) && (
+              <div className="report-photo-preview">
+                <img
+                  src={mediaUrl(photoPreview || form.foto)}
+                  alt="Fotografía de la mascota"
+                  onError={(event) => {
+                    event.currentTarget.style.display = 'none';
+                  }}
+                />
 
-            <canvas
-              ref={canvasRef}
-              aria-label="Vista previa del afiche de mascota perdida"
+                <span>Fotografía actual</span>
+
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={removePhoto}
+                  disabled={saving || uploadingPhoto}
+                >
+                  <X size={14} />
+                  Quitar foto
+                </button>
+              </div>
+            )}
+          </div>
+
+          <label className="full-span checkbox-label">
+            <input
+              type="checkbox"
+              name="mostrar_contacto_qr"
+              checked={form.mostrar_contacto_qr}
+              onChange={change}
             />
 
+            Mostrar mis datos de contacto al escanear el QR.
+          </label>
+
+          <div className="form-actions full-span">
             <button
-              className="primary-button"
               type="button"
-              onClick={download}
-              disabled={!pet}
+              className="secondary-button"
+              onClick={() => navigate(`/usuario/mascotas/${id}`)}
+              disabled={saving || uploadingPhoto}
             >
-              <Download size={17} />
-              Descargar PNG
+              Cancelar
             </button>
-          </section>
-        </div>
-      )}
+
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={saving || uploadingPhoto}
+            >
+              <Save size={17} />
+
+              {saving
+                ? 'Guardando cambios...'
+                : uploadingPhoto
+                  ? 'Subiendo fotografía...'
+                  : 'Guardar cambios'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
+```
